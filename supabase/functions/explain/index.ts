@@ -52,6 +52,21 @@ const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 // service_role でのみ RLS をバイパスして内部テーブルへアクセスできる。両方そろって初めて共有ストアが使える。
 const STORE_READY = Boolean(SUPABASE_URL && SERVICE_ROLE_KEY);
 
+// 課金しうるプロバイダキーが1つでもあるか＝「お金が出る」環境かどうか。
+// なぜ必要か（Codex 合意 2026-06-30・旧 fail-closed の弱点補強）:
+//   hosted 判定を DENO_DEPLOYMENT_ID 単独に頼ると、その変数が外れた環境で IS_HOSTED=false かつ
+//   STORE_READY=false になり rateCheck が素通し('ok')→ 実キーがあると無防備に課金されうる。
+//   そこで「課金キーがある環境では、共有レート制限ストアの存在を必ず要求する」不変条件を別途立てる。
+const HAS_PROVIDER_KEY = Boolean(
+  Deno.env.get('ANTHROPIC_API_KEY') ||
+  Deno.env.get('XAI_API_KEY') ||
+  Deno.env.get('GEMINI_API_KEY'),
+);
+// fail-closed を強制すべき環境＝hosted、または“課金キーがある”環境。これを満たすのに store が無ければ遮断する。
+// 開発トレードオフ: ローカルで実LLMを試したいときは、ローカル Supabase ストアも併走させること
+//   （実キーだけ置いて store 無し＝設計上わざと 503。お金が出る経路をレート制限なしで開けないため）。
+const ENFORCE_STORE = IS_HOSTED || HAS_PROVIDER_KEY;
+
 const TURNSTILE_SECRET = Deno.env.get('TURNSTILE_SECRET');
 
 /**
@@ -120,26 +135,36 @@ function sbHeaders(): Record<string, string> {
   };
 }
 
+// レート判定の3値。boolean だと「超過」と「ストア障害」を区別できず、fail-open/closed を出し分けられない。
+//   ok      = 上限内（許可）
+//   limited = 上限超過（→ 429）
+//   error   = ストア/RPC 障害（hosted では fail-closed=503、local/dev は素通し）
+type RateOutcome = 'ok' | 'limited' | 'error';
+
 /**
  * 共有ストアの原子的レート制限。rate_check RPC(SECURITY DEFINER, service_role限定)を呼ぶ。
- * 返り値 true=許可 / false=超過。
- * エラー時の方針: ここでは fail-open（true を返す）にし、DB の一時障害で正当ユーザーを巻き込まない。
- *   ただしコスト防衛としては fail-closed の方が安全な側面もある。Turnstile と併用する前提で、
- *   恒常的な濫用は Turnstile/Cloudflare WAF 側でも受ける設計（多層）。この判断は要再評価ポイント。
+ *
+ * fail-closed 方針（2026-06-30・Codex 保留判定 #1 を反映 / WHY・再発防止）:
+ *   旧実装は DB エラー時に true（fail-open）を返していた。だが本番(hosted)で「レート制限が壊れている」は
+ *   「コスト防衛が無いまま LLM を叩ける」を意味し、収益ゼロのこのアプリでは課金青天井に直結する。
+ *   そこで判定を3値で返し、呼び出し側(handler)が ENFORCE_STORE（hosted か課金キー有）では error を 503 に変換して LLM を叩かせない。
+ *   キーも無いローカル/dev は従来どおり素通しにして開発を止めない（出し分けは handler の ENFORCE_STORE 判定）。
+ *   関連: docs/COST_DEFENSE.md「公開前にやること #1」。
  */
-async function rateCheck(key: string, limit: number, windowSeconds: number): Promise<boolean> {
-  if (!STORE_READY) return true; // ローカル/未設定では素通し（本番は必ず STORE_READY）
+async function rateCheck(key: string, limit: number, windowSeconds: number): Promise<RateOutcome> {
+  // STORE_READY=false は基本ローカルのみ（hosted は handler 冒頭のハードガードで既に 503 済み）。素通し。
+  if (!STORE_READY) return 'ok';
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/rate_check`, {
       method: 'POST',
       headers: sbHeaders(),
       body: JSON.stringify({ p_key: key, p_limit: limit, p_window_seconds: windowSeconds }),
     });
-    if (!res.ok) return true; // RPC エラーは fail-open（上記方針）
+    if (!res.ok) return 'error'; // RPC エラー → hosted では fail-closed（呼び出し側で 503）
     const allowed = await res.json();
-    return allowed === true;
+    return allowed === true ? 'ok' : 'limited';
   } catch {
-    return true;
+    return 'error'; // ネットワーク等の例外も error 扱い（hosted=fail-closed）
   }
 }
 
@@ -153,10 +178,14 @@ async function cacheGet(key: string): Promise<{ explanation: string; provider: s
       )}&select=explanation,provider`,
       { headers: sbHeaders() },
     );
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (ENFORCE_STORE) console.error(`cacheGet failed: ${res.status}`); // hosted で継続失敗を観測可能に
+      return null;
+    }
     const rows = (await res.json()) as { explanation: string; provider: string }[];
     return rows.length ? rows[0] : null;
-  } catch {
+  } catch (err) {
+    if (ENFORCE_STORE) console.error('cacheGet error', err);
     return null;
   }
 }
@@ -171,13 +200,16 @@ async function cachePut(
 ): Promise<void> {
   if (!STORE_READY) return;
   try {
-    await fetch(`${SUPABASE_URL}/rest/v1/explain_cache?on_conflict=cache_key`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/explain_cache?on_conflict=cache_key`, {
       method: 'POST',
       headers: { ...sbHeaders(), Prefer: 'resolution=merge-duplicates,return=minimal' },
       body: JSON.stringify({ cache_key: key, game, level, explanation, provider }),
     });
-  } catch {
-    // ベストエフォート。キャッシュ書き込み失敗は致命的でない。
+    // キャッシュ書込はベストエフォート（失敗しても本処理は継続）。ただし“コスト核”なので、
+    // 継続失敗は「同一局面の再課金が止まらない＝コスト跳ね上がり」の予兆。hosted では観測可能にする（Codex指摘⑤）。
+    if (!res.ok && ENFORCE_STORE) console.error(`cachePut failed: ${res.status}`);
+  } catch (err) {
+    if (ENFORCE_STORE) console.error('cachePut error', err);
   }
 }
 
@@ -358,16 +390,42 @@ Deno.serve(async (req: Request) => {
     req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
     'unknown';
 
+  // 本番ハードガード（fail-closed の入口・Codex 保留判定 #1）:
+  //   ENFORCE_STORE（hosted か課金キー有）なのに共有ストア（service_role 接続）が無い＝レート制限/
+  //   クォータ/キャッシュが全滅した状態。この状態で LLM を叩かせると無防備に課金されるので 503 で止める。
+  //   通常 hosted では SUPABASE_URL / SERVICE_ROLE_KEY は自動注入されるため、ここに来るのは設定事故のとき。
+  if (ENFORCE_STORE && !STORE_READY)
+    return new Response(JSON.stringify({ error: 'service unavailable' }), { status: 503, headers });
+
   // Turnstile（有効化時のみ）。bot による自動濫用を入口で弾く。
   if (!(await verifyTurnstile(req.headers.get('x-turnstile-token'), ip)))
     return new Response(JSON.stringify({ error: 'turnstile failed' }), { status: 403, headers });
 
   // 共有ストアのレート制限（分）＋日次クォータ。コスト防衛の主防壁。
-  if (!(await rateCheck(`min:ip:${ip}`, RATE_PER_MIN, 60)))
+  //   limited → 429（超過）。error → ENFORCE_STORE は 503（fail-closed: ストア障害時に無防備で叩かせない）、
+  //   キー無しローカルは素通し（開発を止めない）。
+  // なぜ検証/キャッシュ判定より“前”にレート制限するか（Codex指摘④への結論・意図的な順序）:
+  //   後ろに置くと、不正JSONや巨大bodyを無限に送る濫用が「カウントされず無料」になり濫用対策が抜ける。
+  //   濫用は入口で数えるのが正しい。「他人のクォータを焼ける」懸念は IP 詐称可否(#2)に帰着し、
+  //   その信頼境界は別ブロッカー #2 で確定する（ここで順序は変えない）。
+  const minRate = await rateCheck(`min:ip:${ip}`, RATE_PER_MIN, 60);
+  if (minRate === 'limited')
     return new Response(JSON.stringify({ error: 'rate limited' }), { status: 429, headers });
-  if (!(await rateCheck(`day:ip:${ip}`, RATE_PER_DAY, 86_400)))
+  if (minRate === 'error' && ENFORCE_STORE)
+    return new Response(JSON.stringify({ error: 'rate limiter unavailable' }), {
+      status: 503,
+      headers,
+    });
+
+  const dayRate = await rateCheck(`day:ip:${ip}`, RATE_PER_DAY, 86_400);
+  if (dayRate === 'limited')
     return new Response(JSON.stringify({ error: 'daily quota exceeded' }), {
       status: 429,
+      headers,
+    });
+  if (dayRate === 'error' && ENFORCE_STORE)
+    return new Response(JSON.stringify({ error: 'rate limiter unavailable' }), {
+      status: 503,
       headers,
     });
 
