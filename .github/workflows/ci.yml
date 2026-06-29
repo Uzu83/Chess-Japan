@@ -1,8 +1,11 @@
 name: CI
 
 on:
+  # main だけだと、自動パイプライン/作業ブランチ(claude/**, auto/**)の push に CI が走らず
+  # 「設定はあるが一度も実行されない」状態になる（実際にそうなっていた）。
+  # 作業ブランチでも回るよう拡張。PR でも実行。
   push:
-    branches: [main]
+    branches: [main, 'claude/**', 'auto/**']
   pull_request:
 
 permissions:
@@ -44,6 +47,22 @@ jobs:
       - name: Audit (high severity)
         run: npm audit --audit-level=high
         continue-on-error: true
+
+  # Edge Function は Deno ランタイム。Node の typecheck/build では一切検査されない死角だったため、
+  # ここで deno check で型安全を担保し、コスト防衛の心臓部(supabase/functions)も CI で守る。
+  # 注: 整形は既存の Prettier(シングルクオート)に一本化する。deno fmt はダブルクオート規約で
+  #     Prettier と衝突するため CI には入れない（フォーマッタ二重化を避ける＝必要十分）。
+  #     deno lint も vitest 依存のテストファイルを拾って誤検知するため不採用。型検査だけ回す。
+  edge-functions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Deno type check (Edge Functions)
+        # 単一ファイル固定だと新規 Edge Function を足しても型検査されない(CI-02)。全 index.ts を対象に。
+        run: deno check supabase/functions/*/index.ts
 
   secret-scan:
     runs-on: ubuntu-latest

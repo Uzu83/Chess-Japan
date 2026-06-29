@@ -246,9 +246,16 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: 'method not allowed' }), { status: 405, headers });
   }
 
+  // クライアント識別子(レート制限キー)。
+  // CD-001(多観点レビュー)対応: x-forwarded-for の“先頭値”はクライアントが自由に詐称でき、
+  //   リクエスト毎に別IPを名乗ってウィンドウをリセットできる。インフラが付与し詐称困難な
+  //   cf-connecting-ip を優先する。x-forwarded-for は非Cloudflare環境向けのフォールバックに留める。
+  // !!! 将来の共有ストア・レート制限へ引き継ぐ際の必須注意 !!!
+  //   x-forwarded-for を使う場合でも“先頭”を信用しない(詐称可能)。信頼できるプロキシ数を踏まえ
+  //   右側を採用するか、cf-connecting-ip / Turnstile トークンを主キーにすること。
   const ip =
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
     req.headers.get('cf-connecting-ip') ??
+    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
     'unknown';
   if (rateLimited(ip)) {
     return new Response(JSON.stringify({ error: 'rate limited' }), { status: 429, headers });

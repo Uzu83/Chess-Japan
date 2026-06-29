@@ -84,9 +84,7 @@ const LIMITS = {
 const QUALITIES: readonly MoveQuality[] = ['best', 'good', 'inaccuracy', 'mistake', 'blunder'];
 const LEVELS: readonly Level[] = ['beginner', 'intermediate', 'advanced'];
 
-export type ValidationResult =
-  | { ok: true; value: ExplainBody }
-  | { ok: false; error: string };
+export type ValidationResult = { ok: true; value: ExplainBody } | { ok: false; error: string };
 
 function isStr(v: unknown): v is string {
   return typeof v === 'string';
@@ -101,6 +99,16 @@ function isFiniteNum(v: unknown): v is number {
  *  改行や引用符を使って「これまでの指示を無視せよ」のような“命令文”を注入される余地を消す。
  *  制御文字を空白化することで、語彙が複数行に化けてプロンプト構造を壊すのを防ぐ。 */
 const CONTROL_CHARS = /[\u0000-\u001F\u007F]/g;
+
+/** 自由文(question/history.content)から制御文字を除去し前後空白を削る。
+ *  なぜ必要か(多観点レビュー INV-001/PI-001/PI-002 が収束した実バグへの対応):
+ *  buildPrompt は history を `${role}: ${content}` で改行連結し、question を「${question}」に展開する。
+ *  content/question に生の改行を仕込むと「ユーザー: …(改行)解説者: 偽の応答」のような“偽の対話ターン”を
+ *  構造的に捏造できる。pv/profile 用語は sanitizeStringArray で除去済みなのに、この2フィールドだけ
+ *  素通しだった（しかも index.ts には「無害化済み」と誤コメントが残っていた）。ここで一貫させる。 */
+function cleanText(s: string): string {
+  return s.replace(CONTROL_CHARS, ' ').trim();
+}
 
 /** 文字列配列を検証し、要素数・各要素長で切り詰める（過大入力をサイレントに拒否ではなく上限でクリップ）。
  *  なぜクリップして通すか: known/unknown 用語や PV は“多すぎる”だけなら致命的でない。
@@ -148,13 +156,27 @@ export function validateExplainBody(input: unknown): ValidationResult {
     return { ok: false, error: 'invalid fenOrSfen' };
 
   // 任意フィールドは「あるなら型・長さ・範囲を満たすこと」。
-  if (c.movePlayed !== undefined && (!isStr(c.movePlayed) || c.movePlayed.length > LIMITS.moveMax))
+  // 空文字は拒否(REG-01: fenOrSfen は length===0 を弾くのに movePlayed/bestMove だけ "" を通すと
+  //   facts に "movePlayed":"" が載って「指し手あり・内容空」の矛盾データを LLM に渡してしまう非対称)。
+  if (
+    c.movePlayed !== undefined &&
+    (!isStr(c.movePlayed) || c.movePlayed.length === 0 || c.movePlayed.length > LIMITS.moveMax)
+  )
     return { ok: false, error: 'invalid movePlayed' };
-  if (c.bestMove !== undefined && (!isStr(c.bestMove) || c.bestMove.length > LIMITS.moveMax))
+  if (
+    c.bestMove !== undefined &&
+    (!isStr(c.bestMove) || c.bestMove.length === 0 || c.bestMove.length > LIMITS.moveMax)
+  )
     return { ok: false, error: 'invalid bestMove' };
-  if (c.evalBefore !== undefined && (!isFiniteNum(c.evalBefore) || Math.abs(c.evalBefore) > LIMITS.evalAbsMax))
+  if (
+    c.evalBefore !== undefined &&
+    (!isFiniteNum(c.evalBefore) || Math.abs(c.evalBefore) > LIMITS.evalAbsMax)
+  )
     return { ok: false, error: 'invalid evalBefore' };
-  if (c.evalAfter !== undefined && (!isFiniteNum(c.evalAfter) || Math.abs(c.evalAfter) > LIMITS.evalAbsMax))
+  if (
+    c.evalAfter !== undefined &&
+    (!isFiniteNum(c.evalAfter) || Math.abs(c.evalAfter) > LIMITS.evalAbsMax)
+  )
     return { ok: false, error: 'invalid evalAfter' };
   if (c.quality !== undefined && !QUALITIES.includes(c.quality as MoveQuality))
     return { ok: false, error: 'invalid quality' };
@@ -173,11 +195,12 @@ export function validateExplainBody(input: unknown): ValidationResult {
   };
 
   // question は followup のときだけ意味を持つ。長さ上限でトークン膨張攻撃を抑止。
+  // 制御文字除去＋trim で、改行による構造注入(PI-002)と空白のみ質問の通過(REG-02)を同時に塞ぐ。
   let question: string | undefined;
   if (b.question !== undefined) {
     if (!isStr(b.question) || b.question.length > LIMITS.questionMax)
       return { ok: false, error: 'invalid question' };
-    question = b.question;
+    question = cleanText(b.question);
   }
   if (mode === 'followup' && (!question || question.length === 0))
     return { ok: false, error: 'question required for followup' };
@@ -191,12 +214,17 @@ export function validateExplainBody(input: unknown): ValidationResult {
     // body 16KB 上限ゆえ全走査は安価。
     const items: { role: 'user' | 'assistant'; content: string }[] = [];
     for (const el of b.history) {
-      if (typeof el !== 'object' || el === null) return { ok: false, error: 'invalid history item' };
+      if (typeof el !== 'object' || el === null)
+        return { ok: false, error: 'invalid history item' };
       const h = el as Record<string, unknown>;
       if (h.role !== 'user' && h.role !== 'assistant')
         return { ok: false, error: 'invalid history role' };
       if (!isStr(h.content)) return { ok: false, error: 'invalid history content' };
-      items.push({ role: h.role, content: h.content.slice(0, LIMITS.historyContentMax) });
+      // 制御文字除去(INV-001/PI-001: 偽ターン捏造の防止)してから長さ上限でクリップ。
+      items.push({
+        role: h.role,
+        content: cleanText(h.content).slice(0, LIMITS.historyContentMax),
+      });
     }
     // 直近 historyMaxItems 件だけ採用（古い文脈はコスト/関連性の観点で捨てる）。
     history = items.slice(-LIMITS.historyMaxItems);
@@ -225,6 +253,16 @@ export function validateExplainBody(input: unknown): ValidationResult {
  *   キー要素は決定的に並べ、followup は対話的でキャッシュに向かないので対象外（呼び出し側で分岐）。
  * 注意: ここではキー“入力オブジェクト”を返すだけ。ハッシュ化やDB参照は共有ストア実装側（Supabase接続後）。
  *   level を含めるのは、レベルで解説文面が変わる＝別キャッシュにすべきだから。
+ *
+ * !!! キャッシュ実装前に必ず解決すること(Codex指摘#1の地雷) !!!
+ *   現在のキーは pv と profile.known/unknown(語彙) を“含めない”。一方 buildPrompt は context全体(pv含む)と
+ *   語彙データをプロンプトに入れている。このままキャッシュを有効化すると、同一局面・同一levelでも
+ *   「語彙/PVが違う別ユーザー」に、別人向けに生成された文面を再利用してしまう。
+ *   対処の方向は2択:
+ *     (a) キーに pv と語彙(正規化済み)を含める → ただし語彙差でキャッシュヒット率が激減しコスト核の意味が薄れる。
+ *     (b) キャッシュ対象の explain プロンプトから語彙/PV個別性を外し「局面+level の基本解説」だけを
+ *         キャッシュ、語彙パーソナライズはキャッシュ外(クライアント側 or 非キャッシュ)で行う。
+ *   PoC では (b) を推奨（コスト最小と整合）。この判断は Supabase キャッシュ実装時に確定する。
  */
 export function cacheKeyInput(body: ExplainBody): Record<string, unknown> {
   return {
