@@ -5,8 +5,12 @@
   "type": "module",
   "description": "既存のオープンソースAIを流用し、チェス/将棋の1手1手を解説してくれるWebアプリ",
   "scripts": {
+    "copy-engine": "node scripts/copy-engine.mjs",
+    "predev": "npm run copy-engine",
     "dev": "vite",
+    "prebuild": "npm run copy-engine",
     "build": "tsc -b && vite build",
+    "prepreview": "npm run copy-engine",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "lint": "eslint .",
@@ -16,8 +20,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "chess.js": "^1.4.0",
+    "chessground": "^9.2.1",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "stockfish": "^18.0.8"
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",
