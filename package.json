@@ -17,7 +17,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepare": "husky"
   },
   "dependencies": {
     "chess.js": "^1.4.0",
@@ -38,6 +39,7 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.19",
     "globals": "^15.14.0",
+    "husky": "^9.1.7",
     "jsdom": "^26.0.0",
     "prettier": "^3.4.2",
     "tailwindcss": "^4.1.13",
