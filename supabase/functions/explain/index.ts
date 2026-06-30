@@ -17,7 +17,7 @@
 //
 // 秘密（Supabase secrets に設定。ブラウザにもgitにも出さない）:
 //   ANTHROPIC_API_KEY（既定プロバイダ Claude）/ XAI_API_KEY（Grok）/ GEMINI_API_KEY（Gemini）
-//   TURNSTILE_SECRET（任意。未設定なら Turnstile 検証はスキップ＝キー入手後に有効化）
+//   TURNSTILE_SECRET（課金キーがある環境では必須＝未設定なら 503。キー無しの dev/preview のみ任意）
 //   ALLOWED_ORIGINS（本番は必須。例 https://chess-japan.pages.dev）
 //   LLM_PROVIDER（claude|grok|gemini。既定 claude）/ CLAUDE_MODEL / GROK_MODEL / GEMINI_MODEL
 //   RATE_PER_MIN（既定15）/ RATE_PER_DAY（既定200）
@@ -68,6 +68,15 @@ const HAS_PROVIDER_KEY = Boolean(
 const ENFORCE_STORE = IS_HOSTED || HAS_PROVIDER_KEY;
 
 const TURNSTILE_SECRET = Deno.env.get('TURNSTILE_SECRET');
+
+// Turnstile を必須化すべき環境か（公開前ブロッカー #2 の結論・2026-06-30）。
+// なぜ Turnstile を“硬い防壁”にするか / なぜ IP では不足か（WHY・再発防止）:
+//   調査結論: Supabase Edge の client IP 源は公式に x-forwarded-for だが「空のことがある」既知の不安定さがあり、
+//   詐称防止も保証されていない（cf-connecting-ip も前提にできない）。つまり IP ベースのレート制限は best-effort で
+//   コスト防衛の“硬い”信頼境界にはできない。そこで IP 非依存の人間性証明＝Turnstile を、課金しうる環境で必須化し、
+//   bot 由来のコスト爆発を IP 詐称に関係なく止める。ENFORCE_STORE(#1) と同じ「お金が出るなら必ず防壁」思想。
+//   real key が無い preview/dev では不要（テスト/開発を止めない）。
+const ENFORCE_TURNSTILE = HAS_PROVIDER_KEY;
 
 /**
  * Origin に対する CORS 判定とヘッダ。allowed=false なら呼び出し側は preflight 以外を 403 にする。
@@ -228,6 +237,9 @@ async function verifyTurnstile(token: string | null, ip: string): Promise<boolea
     });
     if (!res.ok) return false;
     const data = await res.json();
+    // success のみ確認（現状は Cloudflare widget 側の hostname 制限に依存）。将来フロントが action を付けるなら
+    // data.action 照合、hostname を縛るなら data.hostname 照合をここに足すと「このエンドポイント用トークンか」まで
+    // 検証できる（Codex指摘②・フロント連携時の申し送り）。
     return data.success === true;
   } catch {
     return false; // 検証経路が壊れたら通さない（Turnstile は明示的に有効化したときだけ動くので fail-closed で良い）
@@ -423,10 +435,15 @@ Deno.serve(async (req: Request) => {
   if (req.method !== 'POST')
     return new Response(JSON.stringify({ error: 'method not allowed' }), { status: 405, headers });
 
-  // クライアント識別子。cf-connecting-ip(インフラ付与・詐称困難)を優先、x-forwarded-for はフォールバック。
+  // クライアント識別子（best-effort・#2）。Supabase Edge の client IP 源は公式に x-forwarded-for だが
+  //   「空のことがある／詐称防止は非保証」。よってこの IP は“補助のレート制限”用で、硬い防壁は Turnstile に置く。
+  //   cf-connecting-ip は前段が Cloudflare のときだけ付く（無いこともある）ので最優先で読むが、過信しない。
+  //   ?? でなく || を使う理由（Codex指摘・空文字バグ修正）: XFF が“空文字”のとき（Supabase で頻発）も
+  //   ?? は素通しして ip='' になってしまう。|| なら空文字も次段→最終 'unknown' に正しく倒せる。
   const ip =
-    req.headers.get('cf-connecting-ip') ??
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+    req.headers.get('cf-connecting-ip') ||
+    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    req.headers.get('x-real-ip') ||
     'unknown';
 
   // 本番ハードガード（fail-closed の入口・Codex 保留判定 #1）:
@@ -436,7 +453,18 @@ Deno.serve(async (req: Request) => {
   if (ENFORCE_STORE && !STORE_READY)
     return new Response(JSON.stringify({ error: 'service unavailable' }), { status: 503, headers });
 
-  // Turnstile（有効化時のみ）。bot による自動濫用を入口で弾く。
+  // 本番ハードガード（#2・bot 防壁の必須化）:
+  //   課金キーがあるのに Turnstile 未設定だと、コスト防衛が spoofable/不安定な IP だけに依存してしまう。
+  //   公開コスト防衛として不十分なので、TURNSTILE_SECRET 未設定なら 503 で止める（＝公開には Turnstile キーが要る）。
+  //   real key の無い preview/dev では ENFORCE_TURNSTILE=false なので素通し（テストを止めない）。
+  if (ENFORCE_TURNSTILE && !TURNSTILE_SECRET)
+    return new Response(JSON.stringify({ error: 'bot protection required' }), {
+      status: 503,
+      headers,
+    });
+
+  // Turnstile 検証。bot による自動濫用を入口で弾く（IP に依存しない人間性証明＝#2 の硬い防壁）。
+  //   TURNSTILE_SECRET 設定時のみ実検証（未設定かつ非課金環境では verifyTurnstile が素通し）。
   if (!(await verifyTurnstile(req.headers.get('x-turnstile-token'), ip)))
     return new Response(JSON.stringify({ error: 'turnstile failed' }), { status: 403, headers });
 
