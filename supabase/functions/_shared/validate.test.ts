@@ -199,19 +199,24 @@ describe('validateExplainBody: 空文字/空白の扱い', () => {
 });
 
 describe('cacheKeyInput', () => {
-  it('explain の主要事実を決定的に並べる（level 既定 beginner）', () => {
+  it('explain の主要事実を決定的に並べる（context全体+語彙、level 既定 beginner）', () => {
     const r = validateExplainBody(validExplain);
     expect(r.ok).toBe(true);
     if (r.ok) {
       const key = cacheKeyInput(r.value);
       expect(key).toEqual({
         game: 'chess',
-        fenOrSfen: validExplain.context.fenOrSfen,
-        movePlayed: 'e2e4',
-        bestMove: null,
-        evalBefore: null,
-        evalAfter: null,
-        quality: null,
+        context: {
+          fenOrSfen: validExplain.context.fenOrSfen,
+          movePlayed: 'e2e4',
+          evalBefore: null,
+          evalAfter: null,
+          bestMove: null,
+          pv: null,
+          quality: null,
+        },
+        known: [],
+        unknown: [],
         level: 'beginner',
       });
     }
@@ -224,5 +229,45 @@ describe('cacheKeyInput', () => {
     const b = validateExplainBody(validExplain);
     expect(a.ok && b.ok).toBe(true);
     if (a.ok && b.ok) expect(cacheKeyInput(a.value).level).not.toBe(cacheKeyInput(b.value).level);
+  });
+  // #3 回帰防止: 旧キーは pv を含めず、別の読み筋でも同一キー→誤再利用していた。
+  it('pv が違えば別キー（#3: 旧キーの誤再利用バグの回帰防止）', () => {
+    const a = validateExplainBody({
+      ...validExplain,
+      context: { ...validExplain.context, pv: ['e7e5'] },
+    });
+    const b = validateExplainBody({
+      ...validExplain,
+      context: { ...validExplain.context, pv: ['c7c5'] },
+    });
+    expect(a.ok && b.ok).toBe(true);
+    if (a.ok && b.ok)
+      expect(JSON.stringify(cacheKeyInput(a.value))).not.toBe(
+        JSON.stringify(cacheKeyInput(b.value)),
+      );
+  });
+  // #3 回帰防止: 語彙が違うユーザーに別人向けパーソナライズ解説を配らない。
+  it('語彙(unknown)が違えば別キー（別ユーザーへ誤再利用しない）', () => {
+    const a = validateExplainBody({ ...validExplain, profile: { known: [], unknown: ['pin'] } });
+    const b = validateExplainBody({ ...validExplain, profile: { known: [], unknown: ['fork'] } });
+    expect(a.ok && b.ok).toBe(true);
+    if (a.ok && b.ok)
+      expect(JSON.stringify(cacheKeyInput(a.value))).not.toBe(
+        JSON.stringify(cacheKeyInput(b.value)),
+      );
+  });
+  // 並び順だけの差でキャッシュを割らない（集合として正規化＝sort）。
+  it('語彙の並び順が違っても同一キー（集合正規化）', () => {
+    const a = validateExplainBody({
+      ...validExplain,
+      profile: { known: ['pin', 'fork'], unknown: [] },
+    });
+    const b = validateExplainBody({
+      ...validExplain,
+      profile: { known: ['fork', 'pin'], unknown: [] },
+    });
+    expect(a.ok && b.ok).toBe(true);
+    if (a.ok && b.ok)
+      expect(JSON.stringify(cacheKeyInput(a.value))).toBe(JSON.stringify(cacheKeyInput(b.value)));
   });
 });

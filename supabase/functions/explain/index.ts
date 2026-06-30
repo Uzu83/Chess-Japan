@@ -234,9 +234,13 @@ async function verifyTurnstile(token: string | null, ip: string): Promise<boolea
   }
 }
 
-/** cacheKeyInput を正規化 JSON にして SHA-256 16進ハッシュ化（explain のキャッシュキー）。 */
-async function hashCacheKey(body: ExplainBody): Promise<string> {
-  const canonical = JSON.stringify(cacheKeyInput(body));
+/**
+ * cacheKeyInput(body) に provider/model を足して正規化 JSON 化 → SHA-256 16進（explain のキャッシュキー）。
+ * provider/model を含める理由(#3): LLM_PROVIDER やモデルを切り替えたとき、別モデルが生成した旧解説を
+ *   返さないため。出力を変える要素はすべてキーに含める（cacheKeyInput が body 側、ここが env 側を担当）。
+ */
+async function hashCacheKey(body: ExplainBody, provider: string, model: string): Promise<string> {
+  const canonical = JSON.stringify({ ...cacheKeyInput(body), provider, model });
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -294,10 +298,41 @@ function buildPrompt(body: ExplainBody): { system: string; user: string } {
   return { system, user };
 }
 
+// ---- プロバイダの正規化とモデル解決（キーと実呼び出しで“同じ値”を使うための単一の真実源） ----
+type Provider = 'claude' | 'grok' | 'gemini';
+
+// プロバイダ別の既定モデル。callX とキャッシュキーの両方がこれを使う＝モデル名のドリフト防止。
+//   キャッシュキーに model を含める(#3)ので「実際に叩くモデル」と「キーのモデル」が必ず一致している必要がある。
+//   ここを唯一の定義元にして、callClaude 等のインライン既定値の二重管理（＝ズレてキャッシュ不整合の温床）をなくす。
+const MODEL_DEFAULTS: Record<Provider, string> = {
+  claude: 'claude-sonnet-4-6',
+  grok: 'grok-4.1-fast',
+  gemini: 'gemini-2.5-flash-lite',
+};
+
+/**
+ * LLM_PROVIDER を union に正規化（trim・未知値/空は既定 claude）。
+ * なぜ正規化するか（Codex 合意 2026-06-30・指摘①）: 未正規化だと "claude " や "foo" がそのままキーの provider に
+ *   入り、実呼び出しは callProvider 既定で Claude に落ちる＝同じ実行なのにキーが割れ、応答の provider 表記も実態と
+ *   ズレる。キーと実呼び出しで“同じ正規化値”を使うことで #3 の「キー＝実態」不変条件を保つ。
+ */
+function resolveProvider(): Provider {
+  const raw = (Deno.env.get('LLM_PROVIDER') ?? 'claude').trim();
+  return raw === 'grok' || raw === 'gemini' ? raw : 'claude';
+}
+
+/** provider が実際に使うモデル文字列を解決（env 上書き優先・既定は MODEL_DEFAULTS）。キーと実呼び出しで共用。 */
+function resolveModel(provider: Provider): string {
+  if (provider === 'grok') return Deno.env.get('GROK_MODEL') ?? MODEL_DEFAULTS.grok;
+  if (provider === 'gemini') return Deno.env.get('GEMINI_MODEL') ?? MODEL_DEFAULTS.gemini;
+  return Deno.env.get('CLAUDE_MODEL') ?? MODEL_DEFAULTS.claude;
+}
+
 // ---- プロバイダ実装（すべて raw HTTP・同一インターフェース。max_tokens=500 でコスト上限を物理的に固定） ----
 
+// callX は handler が解決した model を受け取る（キャッシュキーに使った model と同一を実 payload に渡す＝#3 不変条件）。
 /** 既定: Claude Sonnet 4.6。短い解説なので thinking は付けない（adaptive 不要・コスト/レイテンシ最小）。 */
-async function callClaude(system: string, user: string): Promise<string> {
+async function callClaude(model: string, system: string, user: string): Promise<string> {
   const key = Deno.env.get('ANTHROPIC_API_KEY');
   if (!key) throw new Error('ANTHROPIC_API_KEY 未設定');
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -308,7 +343,7 @@ async function callClaude(system: string, user: string): Promise<string> {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: Deno.env.get('CLAUDE_MODEL') ?? 'claude-sonnet-4-6',
+      model,
       max_tokens: 500,
       system,
       messages: [{ role: 'user', content: user }],
@@ -326,14 +361,14 @@ async function callClaude(system: string, user: string): Promise<string> {
   return text;
 }
 
-async function callGrok(system: string, user: string): Promise<string> {
+async function callGrok(model: string, system: string, user: string): Promise<string> {
   const key = Deno.env.get('XAI_API_KEY');
   if (!key) throw new Error('XAI_API_KEY 未設定');
   const res = await fetch('https://api.x.ai/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: Deno.env.get('GROK_MODEL') ?? 'grok-4.1-fast',
+      model,
       messages: [
         { role: 'system', content: system },
         { role: 'user', content: user },
@@ -347,10 +382,9 @@ async function callGrok(system: string, user: string): Promise<string> {
   return data.choices?.[0]?.message?.content ?? '';
 }
 
-async function callGemini(system: string, user: string): Promise<string> {
+async function callGemini(model: string, system: string, user: string): Promise<string> {
   const key = Deno.env.get('GEMINI_API_KEY');
   if (!key) throw new Error('GEMINI_API_KEY 未設定');
-  const model = Deno.env.get('GEMINI_MODEL') ?? 'gemini-2.5-flash-lite';
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
     {
@@ -368,10 +402,15 @@ async function callGemini(system: string, user: string): Promise<string> {
   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
 }
 
-function callProvider(provider: string, system: string, user: string): Promise<string> {
-  if (provider === 'grok') return callGrok(system, user);
-  if (provider === 'gemini') return callGemini(system, user);
-  return callClaude(system, user); // 既定
+function callProvider(
+  provider: Provider,
+  model: string,
+  system: string,
+  user: string,
+): Promise<string> {
+  if (provider === 'grok') return callGrok(model, system, user);
+  if (provider === 'gemini') return callGemini(model, system, user);
+  return callClaude(model, system, user); // 既定
 }
 
 Deno.serve(async (req: Request) => {
@@ -450,12 +489,13 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: result.error }), { status: 400, headers });
   const body = result.value;
 
-  const provider = Deno.env.get('LLM_PROVIDER') ?? 'claude';
+  const provider = resolveProvider(); // union に正規化（#3・指摘①）
+  const model = resolveModel(provider); // キャッシュキーと実呼び出しで“同一モデル”を使う(#3)
 
   // explain はキャッシュ対象（同一局面+levelの再課金を防止＝コスト核）。followup は対話的なので非キャッシュ。
   let cacheKey: string | null = null;
   if (body.mode === 'explain') {
-    cacheKey = await hashCacheKey(body);
+    cacheKey = await hashCacheKey(body, provider, model);
     const hit = await cacheGet(cacheKey);
     if (hit)
       return new Response(
@@ -466,7 +506,7 @@ Deno.serve(async (req: Request) => {
 
   const { system, user } = buildPrompt(body);
   try {
-    const text = await callProvider(provider, system, user);
+    const text = await callProvider(provider, model, system, user);
     if (cacheKey && text)
       await cachePut(cacheKey, body.game, body.profile?.level ?? 'beginner', text, provider);
     return new Response(JSON.stringify({ text, provider }), { headers });

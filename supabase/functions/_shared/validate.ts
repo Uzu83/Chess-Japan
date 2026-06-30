@@ -252,27 +252,45 @@ export function validateExplainBody(input: unknown): ValidationResult {
  * なぜ正規化が要るか: 同一局面の再解説で LLM を再課金しないため（PLAN の「コスト核」=C5）。
  *   キー要素は決定的に並べ、followup は対話的でキャッシュに向かないので対象外（呼び出し側で分岐）。
  * 注意: ここではキー“入力オブジェクト”を返すだけ。ハッシュ化やDB参照は共有ストア実装側（Supabase接続後）。
- *   level を含めるのは、レベルで解説文面が変わる＝別キャッシュにすべきだから。
  *
- * !!! キャッシュ実装前に必ず解決すること(Codex指摘#1の地雷) !!!
- *   現在のキーは pv と profile.known/unknown(語彙) を“含めない”。一方 buildPrompt は context全体(pv含む)と
- *   語彙データをプロンプトに入れている。このままキャッシュを有効化すると、同一局面・同一levelでも
- *   「語彙/PVが違う別ユーザー」に、別人向けに生成された文面を再利用してしまう。
- *   対処の方向は2択:
- *     (a) キーに pv と語彙(正規化済み)を含める → ただし語彙差でキャッシュヒット率が激減しコスト核の意味が薄れる。
- *     (b) キャッシュ対象の explain プロンプトから語彙/PV個別性を外し「局面+level の基本解説」だけを
- *         キャッシュ、語彙パーソナライズはキャッシュ外(クライアント側 or 非キャッシュ)で行う。
- *   PoC では (b) を推奨（コスト最小と整合）。この判断は Supabase キャッシュ実装時に確定する。
+ * (a) 厳密キー方針（2026-06-30・オーナー選択 / Codex 保留判定 #3 を解消）:
+ *   旧キーは pv と語彙(known/unknown)を“含めず”、一方 buildPrompt は context 全体(pv含む)と語彙を
+ *   プロンプトに入れていた。このままだと同一局面・同一levelでも「語彙/PVが違う別ユーザー」に別人向け文面を
+ *   誤再利用してしまう（公開＝多ユーザーで初めて顕在化する地雷）。対策＝“プロンプトが出力に使う要素を
+ *   すべてキーに含める”:
+ *     - context は全フィールド(pv含む)を固定順で（normalizeContext）。1つでも欠けると将来の誤再利用源になる。
+ *     - 語彙 known/unknown は集合として等価なら同一キーになるよう sort で正規化（並び順だけの差でキャッシュを割らない）。
+ *     - provider/model はサーバ側(env)依存なので“ここ”ではなくハッシュ層(index.ts hashCacheKey)で付与する。
+ *   トレードオフ: 語彙/PV差でヒット率は下がるが、別人の解説を配らない“正しさ”を優先（オーナー判断＝必要十分）。
+ *   将来コストが問題化したら「語彙非依存の素の解説」を別レイヤでキャッシュする(b)案へ拡張余地あり。
  */
 export function cacheKeyInput(body: ExplainBody): Record<string, unknown> {
+  // 集合として正規化（[...] でコピーしてから sort。元配列を破壊しない）。
+  const known = [...(body.profile?.known ?? [])].sort();
+  const unknown = [...(body.profile?.unknown ?? [])].sort();
   return {
     game: body.game,
-    fenOrSfen: body.context.fenOrSfen,
-    movePlayed: body.context.movePlayed ?? null,
-    bestMove: body.context.bestMove ?? null,
-    evalBefore: body.context.evalBefore ?? null,
-    evalAfter: body.context.evalAfter ?? null,
-    quality: body.context.quality ?? null,
+    context: normalizeContext(body.context),
+    known,
+    unknown,
     level: body.profile?.level ?? 'beginner',
+  };
+}
+
+/**
+ * context を固定順・未指定は null で正規化する。
+ * なぜ: JSON 化したキーが「キー欠落 vs undefined」や「フィールド順の差」で別物にならないようにするため。
+ *   ここに ExplainContext の“全”フィールドを並べる（pv 含む）。フィールドを増やしたら必ずここにも足すこと
+ *   （足し忘れ＝プロンプトに効くのにキーに効かない＝誤再利用バグの再発）。
+ */
+function normalizeContext(c: ExplainContext): Record<string, unknown> {
+  return {
+    fenOrSfen: c.fenOrSfen,
+    movePlayed: c.movePlayed ?? null,
+    evalBefore: c.evalBefore ?? null,
+    evalAfter: c.evalAfter ?? null,
+    bestMove: c.bestMove ?? null,
+    pv: c.pv ?? null,
+    quality: c.quality ?? null,
   };
 }
