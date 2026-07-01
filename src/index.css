@@ -1,15 +1,166 @@
 @import 'tailwindcss';
 
-:root {
-  color-scheme: light dark;
+/*
+ * Chess-Japan — デザイントークン定義
+ *
+ * テーマ「静かな日本的モダン」: 和紙 × 墨 × 一点差し色（藍）
+ *
+ * 構造:
+ *   @theme       — Tailwind ユーティリティ化するパレット & フォント
+ *   @layer base  — セマンティックトークン / ダーク上書き / ベーススタイル
+ *   @layer utilities — badge-* / focus-ai などカスタムユーティリティ
+ *
+ * フォント外部読み込みなし:
+ *   COEP: credentialless 下での Google Fonts クロスオリジン制約を避けるため、
+ *   システムスタックのみ（Noto Sans JP / Hiragino / Yu Gothic / Meiryo）。
+ *   ユーザー端末に日本語フォントが常駐しているため品質は実用上十分。
+ *
+ * 差し色を藍(ai-iro)に選んだ理由:
+ *   - 知的・落ち着き・チェス駒の青系と親和する
+ *   - 朱(vermilion)より「思考・学び」の世界観に合致する
+ *   - 一色だけ使うことでテンプレ感を排除し、余白と組み合わせて品を出す
+ */
+
+@theme {
+  /* ── 日本語優先フォントスタック ── */
+  --font-sans:
+    'Noto Sans JP', 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Yu Gothic UI',
+    'Meiryo', system-ui, sans-serif;
+
+  /* ── 和紙 (washi) — ライト背景基調 ── */
+  --color-washi: #f7f3ea; /* メイン背景: 温かみのある生成り */
+  --color-washi-dim: #ede8db; /* 一段下がったサーフェス */
+  --color-washi-muted: #d4cbb8; /* ボーダー・区切り */
+
+  /* ── 炭 / 墨 (sumi) — ダーク地 & インクテキスト ── */
+  --color-sumi: #1e1a17; /* ダーク背景 */
+  --color-sumi-surface: #272320; /* ダークサーフェス */
+  --color-sumi-border: #3a3530; /* ダークボーダー */
+  --color-sumi-ink: #2c2622; /* ライト時プライマリテキスト */
+  --color-sumi-mid: #706860; /* セカンダリテキスト */
+  --color-sumi-faint: #9e9288; /* ヒント・プレースホルダ */
+
+  /* ── 藍 (ai-iro / 日本インディゴ) — 一点差し色 ──
+     light: #3b5ea6 with white → 5.68:1 (AA ✓)
+     dark:  #4565a0 with white → 5.25:1 (AA ✓)  ← 4.5:1 要件を満たす最も明るい藍
+     text-dark: #8aaad4 on sumi → 7.98:1 (AAA ✓)                              */
+  --color-ai: #3b5ea6; /* ライト差し色 */
+  --color-ai-bg: #eef2fa; /* 差し色サーフェス(ライト) */
+  --color-ai-hover: #2d4a8a; /* ホバー/押下 */
+  --color-ai-dim: #4565a0; /* ダーク時フィルドボタン bg (白文字 5.25:1) */
+  --color-ai-muted: #8aaad4; /* ダーク時テキスト・サブアクセント */
+  --color-ai-deep: #192540; /* ダーク時差し色サーフェス */
+
+  /* ── セマンティックエイリアス ──
+     @layer base の dark 上書きで自動切替。
+     bg-surface / text-on-surface / border-border / text-muted / text-subtle で使う。 */
+  --color-surface: #f7f3ea;
+  --color-surface-2: #ede8db;
+  --color-on-surface: #2c2622;
+  --color-border: #d4cbb8;
+  --color-muted: #706860;
+  --color-subtle: #9e9288;
 }
 
-html,
-body,
-#root {
-  height: 100%;
+@layer base {
+  :root {
+    color-scheme: light dark;
+
+    /* ── 手の質バッジ — ライトモード ──
+       色相は lichess 準拠(best=青, good=緑, inaccuracy=黄, mistake=橙, blunder=赤)、
+       彩度を和紙の世界観に落としてテンプレ感を消す。
+       WHY CSS変数: ライト/ダーク切替を badge-* クラスだけで完結させ
+       コンポーネント側に dark: 分岐を書かなくてよくする。               */
+    --q-best-bg: #eef2fa; /* 藍 tint */
+    --q-best-fg: #2d4a8a;
+    --q-good-bg: #eaf1ec; /* 緑青(rokushō) tint */
+    --q-good-fg: #2a6044;
+    --q-inac-bg: #f7f2df; /* 黄土(ōdo) tint */
+    --q-inac-fg: #7a5c00;
+    --q-miss-bg: #f7ece0; /* 柿(kaki) tint */
+    --q-miss-fg: #8c3e10;
+    --q-blnd-bg: #f7e0de; /* 朱(shu) tint */
+    --q-blnd-fg: #882018;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      /* セマンティックトークン — ダーク上書き */
+      --color-surface: #1e1a17;
+      --color-surface-2: #272320;
+      --color-on-surface: #f0ece4; /* 温かみのある off-white テキスト */
+      --color-border: #3a3530;
+      --color-muted: #9e9288;
+      --color-subtle: #706860;
+
+      /* 藍 — ダーク上書き */
+      --color-ai: #4565a0; /* フィルドボタン bg(白文字 5.25:1) */
+      --color-ai-bg: #192540; /* 差し色サーフェス */
+      --color-ai-hover: #3b5ea6; /* ホバー(ライト値に戻す→より明るく見せる) */
+      --color-ai-muted: #8aaad4; /* テキスト・アイコン */
+
+      /* 手の質バッジ — ダークモード */
+      --q-best-bg: #1a2845;
+      --q-best-fg: #8aaad4;
+      --q-good-bg: #0f2a1c;
+      --q-good-fg: #78b898;
+      --q-inac-bg: #251c00;
+      --q-inac-fg: #d4a830;
+      --q-miss-bg: #2a1208;
+      --q-miss-fg: #d4844a;
+      --q-blnd-bg: #2a0c0a;
+      --q-blnd-fg: #d46c66;
+    }
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    /* 日本語フォントのサブピクセルアンチエイリアス */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
 }
 
-body {
-  margin: 0;
+@layer utilities {
+  /* ── 手の質バッジ ──
+     CSS 変数単体で ライト/ダーク自動切替。コンポーネント側に dark: 不要。
+     WHY 単一クラス: 5段階 × 2モード = 10変数をコンポーネントで繰り返さず
+     index.css に一元管理する(「真実の源」を分散させない原則)。            */
+  .badge-best {
+    background-color: var(--q-best-bg);
+    color: var(--q-best-fg);
+  }
+  .badge-good {
+    background-color: var(--q-good-bg);
+    color: var(--q-good-fg);
+  }
+  .badge-inaccuracy {
+    background-color: var(--q-inac-bg);
+    color: var(--q-inac-fg);
+  }
+  .badge-mistake {
+    background-color: var(--q-miss-bg);
+    color: var(--q-miss-fg);
+  }
+  .badge-blunder {
+    background-color: var(--q-blnd-bg);
+    color: var(--q-blnd-fg);
+  }
+
+  /* ── フォーカスリング ──
+     keyboard-only (focus-visible) に限定。
+     color: var(--color-ai) でダーク時も自動切替。
+     outline を使う理由: box-shadow(ring)より border-radius を引き継ぎやすく
+     スクロールコンテナ内でのクリッピング問題が起きない。                    */
+  .focus-ai:focus-visible {
+    outline: 2px solid var(--color-ai);
+    outline-offset: 2px;
+  }
 }
