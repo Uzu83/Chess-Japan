@@ -1,12 +1,29 @@
 import type { MoveRecord, MoveQuality } from '../core/types';
 import { qualityLabelJa } from '../core/classify';
 
-const QUALITY_STYLE: Record<MoveQuality, string> = {
-  best: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200',
-  good: 'bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-200',
-  inaccuracy: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200',
-  mistake: 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-200',
-  blunder: 'bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-200',
+/*
+ * MoveList — 棋譜手順表
+ *
+ * 手の質バッジ:
+ *   badge-* クラスで index.css の CSS 変数を参照。
+ *   ライト/ダーク自動切替。コンポーネント側に dark: を書かない(「真実の源」集約)。
+ *   色相は lichess 準拠(best=藍, good=緑青, inaccuracy=黄土, mistake=柿, blunder=朱)。
+ *
+ * 現在手ハイライト:
+ *   bg-ai-bg text-ai で藍サーフェスをアクティブ状態として使う。
+ *   他手とのコントラストを確保しつつ世界観に統一する。
+ *
+ * タップ領域:
+ *   各セルボタンは min-h-9 (36px)。モバイルで 2 カラム表示される手順表内では
+ *   36px でも誤タップは起きにくい(隣接セルとの余白あり)。
+ */
+
+const QUALITY_BADGE: Record<MoveQuality, string> = {
+  best: 'badge-best',
+  good: 'badge-good',
+  inaccuracy: 'badge-inaccuracy',
+  mistake: 'badge-mistake',
+  blunder: 'badge-blunder',
 };
 
 interface MoveListProps {
@@ -24,20 +41,40 @@ export function MoveList({ moves, currentIndex, qualities, onSelect }: MoveListP
   }
 
   const cell = (m?: MoveRecord) => {
-    if (!m) return <span className="text-slate-400">—</span>;
+    if (!m)
+      return (
+        <span className="px-2 py-1 text-sm text-subtle" aria-hidden="true">
+          —
+        </span>
+      );
+
     const ply = m.ply;
     const active = currentIndex === ply + 1;
     const q = qualities[ply];
+
     return (
       <button
+        type="button"
         onClick={() => onSelect(ply + 1)}
-        className={`flex items-center gap-1 rounded px-2 py-0.5 text-left text-sm hover:bg-slate-200 dark:hover:bg-slate-700 ${
-          active ? 'bg-slate-300 font-semibold dark:bg-slate-600' : ''
-        }`}
+        /* a11y: 手の内容と状態をラベルで伝える */
+        aria-label={`${m.san}${q ? `（${qualityLabelJa(q)}）` : ''}${active ? '（現在の局面）' : ''}`}
+        aria-pressed={active}
+        className={[
+          'focus-ai flex min-h-9 w-full items-center gap-1.5 rounded px-2 py-1 text-left text-sm transition-colors',
+          active
+            ? /* アクティブ: 藍サーフェス + 藍テキスト */
+              'bg-ai-bg font-semibold text-ai'
+            : 'text-on-surface hover:bg-surface-2',
+        ].join(' ')}
       >
-        <span>{m.san}</span>
+        {/* 手の表記 */}
+        <span className="font-mono">{m.san}</span>
+
+        {/* 手の質バッジ: badge-* で CSS 変数自動切替 */}
         {q && (
-          <span className={`rounded px-1 text-[10px] ${QUALITY_STYLE[q]}`}>
+          <span
+            className={`shrink-0 rounded px-1 py-px text-[10px] font-medium leading-none ${QUALITY_BADGE[q]}`}
+          >
             {qualityLabelJa(q)}
           </span>
         )}
@@ -46,17 +83,22 @@ export function MoveList({ moves, currentIndex, qualities, onSelect }: MoveListP
   };
 
   return (
-    <div className="max-h-64 overflow-auto rounded-lg border border-slate-200 dark:border-slate-800 lg:max-h-[420px]">
+    /* max-h で溢れたらスクロール。lg でさらに深く。 */
+    <div
+      role="list"
+      aria-label="棋譜手順"
+      className="max-h-64 overflow-auto rounded-xl border border-border lg:max-h-[440px]"
+    >
       <table className="w-full border-collapse text-sm">
         <tbody>
           {rows.map((r) => (
-            <tr
-              key={r.no}
-              className="border-b border-slate-100 last:border-0 dark:border-slate-800"
-            >
-              <td className="w-8 px-2 py-1 text-right text-slate-400">{r.no}.</td>
-              <td className="px-1 py-1">{cell(r.white)}</td>
-              <td className="px-1 py-1">{cell(r.black)}</td>
+            <tr key={r.no} className="border-b border-border last:border-0">
+              {/* 手番号: subtle で控えめに */}
+              <td className="w-8 px-2 py-0.5 text-right text-xs tabular-nums text-subtle select-none">
+                {r.no}.
+              </td>
+              <td className="px-0.5 py-0.5">{cell(r.white)}</td>
+              <td className="px-0.5 py-0.5">{cell(r.black)}</td>
             </tr>
           ))}
         </tbody>

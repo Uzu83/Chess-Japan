@@ -6,6 +6,7 @@ import type { ChessEngine } from '../engine/types';
 import { createEngine, type EngineKind } from '../engine/factory';
 import { requestExplanation } from '../explain/client';
 import { Board } from './Board';
+import { EvalBar } from './EvalBar';
 import { MoveList } from './MoveList';
 import { ExplanationPanel, type ChatTurn } from './ExplanationPanel';
 import { SAMPLE_PGN } from './sample';
@@ -17,7 +18,21 @@ const LEVEL_LABEL: Record<NonNullable<KnowledgeProfile['level']>, string> = {
   advanced: '上級',
 };
 
-/** 棋譜振り返り画面(PoC の縦貫通)。 */
+/*
+ * ReviewView — 棋譜振り返り画面
+ *
+ * レイアウト:
+ *   モバイル: 縦スタック(盤 → 解説パネル)
+ *   lg+:      2カラム(盤 | 手順表・解説)
+ *
+ * EvalBar 追加:
+ *   盤の左側に縦型評価バー。currentContext の evalAfter を白視点に変換して渡す。
+ *   evalAfter は「手を指したプレイヤー視点」なので、黒が指した後は符号を反転して
+ *   白視点に揃える。
+ *
+ *   WHY evalAfter を使うか: board が「index 手目指した後」の局面を表示するため、
+ *   evalBefore(指す前)ではなく evalAfter(指した後)が現在局面と対応する。
+ */
 export function ReviewView() {
   const [pgnText, setPgnText] = useState(SAMPLE_PGN);
   const [game, setGame] = useState<ChessGame | null>(null);
@@ -99,6 +114,27 @@ export function ReviewView() {
   const currentPly = index - 1;
   const currentContext = index >= 1 ? (contexts[currentPly] ?? null) : null;
 
+  /*
+   * 評価バー用: 白視点センチポーン
+   *
+   * buildExplanationContext では:
+   *   evalAfter = negateScore(scoreAfter) のセンチポーン換算値
+   *   = 「手を指したプレイヤー(手番)視点」の、指した後の評価値
+   *
+   * 白が指した後: evalAfter > 0 = 白有利 → そのまま使う
+   * 黒が指した後: evalAfter > 0 = 黒有利 → 符号を反転して白視点に
+   */
+  const lastMoveColor =
+    game && currentPly >= 0 && currentPly < game.moves.length
+      ? game.moves[currentPly].color
+      : undefined;
+  const evalCpWhite =
+    currentContext?.evalAfter !== undefined && lastMoveColor !== undefined
+      ? lastMoveColor === 'w'
+        ? currentContext.evalAfter
+        : -currentContext.evalAfter
+      : undefined;
+
   const onExplain = useCallback(async () => {
     if (!currentContext) return;
     setBusy(true);
@@ -157,80 +193,127 @@ export function ReviewView() {
   const max = game?.length ?? 0;
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-6">
-      <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-        <span>
-          エンジン:{' '}
+    <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">
+      {/* ── ツールバー(エンジン状態 + レベル切替) ── */}
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        {/* エンジン状態: 補足情報なので subtle 色で控えめに */}
+        <span className="text-xs text-subtle">
           {engineKind === 'loading'
             ? '読み込み中…'
             : engineKind === 'stockfish'
-              ? 'Stockfish (WASM)'
-              : 'モック（簡易評価）'}
+              ? 'Stockfish WASM'
+              : 'モック評価'}
         </span>
-        <span className="ml-auto flex items-center gap-1">
-          レベル:
+
+        {/* レベル切替: 藍アクセントでアクティブを示す */}
+        <div className="ml-auto flex items-center gap-1">
+          <span className="mr-1 text-xs text-muted">レベル</span>
           {LEVELS.map((lv) => (
             <button
               key={lv}
+              type="button"
               onClick={() => setLevel(lv!)}
-              className={`rounded px-2 py-0.5 ${
+              /* 44px タップ領域確保: min-h-11 = 44px */
+              className={[
+                'focus-ai min-h-11 rounded px-2.5 text-xs font-medium transition-colors',
                 level === lv
-                  ? 'bg-slate-300 dark:bg-slate-600'
-                  : 'hover:bg-slate-200 dark:hover:bg-slate-700'
-              }`}
+                  ? 'bg-ai text-white dark:bg-ai-dim'
+                  : 'text-muted hover:bg-surface-2 hover:text-on-surface',
+              ].join(' ')}
             >
               {LEVEL_LABEL[lv!]}
             </button>
           ))}
-        </span>
+        </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
-        {/* 盤 + 操作 */}
-        <section className="flex flex-col gap-3">
-          <div className="mx-auto w-full max-w-[480px]">
-            <Board fen={fen} lastMoveUci={lastMoveUci} />
+        {/* ── 盤 + 評価バー + ナビ ── */}
+        <section className="flex flex-col gap-4">
+          {/* 評価バー(左) + 盤(右) を横並び
+              items-stretch で EvalBar が盤と同じ高さになる。 */}
+          <div className="mx-auto flex w-full max-w-[500px] items-stretch gap-2">
+            {/* EvalBar ラッパ: w-3(12px) 固定幅、盤の高さに self-stretch */}
+            <div className="w-3 flex-none">
+              <EvalBar evalCp={evalCpWhite} />
+            </div>
+            {/* 盤 */}
+            <div className="min-w-0 flex-1">
+              <Board fen={fen} lastMoveUci={lastMoveUci} />
+            </div>
           </div>
-          <div className="flex items-center justify-center gap-2">
-            <NavButton label="⏮" onClick={() => setIndex(0)} disabled={!game || index === 0} />
+
+          {/* ナビゲーションボタン
+              WHY 大きなタップ領域: 棋譜ナビは連続操作が多くスマホでの誤タップを減らす。
+              min-h-11(44px) + px-4 で実寸タップ面積を確保。                          */}
+          <div className="flex items-center justify-center gap-1.5">
+            <NavButton
+              label="⏮"
+              ariaLabel="先頭へ"
+              onClick={() => setIndex(0)}
+              disabled={!game || index === 0}
+            />
             <NavButton
               label="◀"
+              ariaLabel="1手戻る"
               onClick={() => setIndex((i) => Math.max(0, i - 1))}
               disabled={!game || index === 0}
             />
-            <span className="min-w-16 text-center text-sm text-slate-500">
+            <span className="min-w-[4.5rem] text-center text-sm tabular-nums text-muted">
               {index} / {max}
             </span>
             <NavButton
               label="▶"
+              ariaLabel="1手進む"
               onClick={() => setIndex((i) => Math.min(max, i + 1))}
               disabled={!game || index === max}
             />
-            <NavButton label="⏭" onClick={() => setIndex(max)} disabled={!game || index === max} />
+            <NavButton
+              label="⏭"
+              ariaLabel="末尾へ"
+              onClick={() => setIndex(max)}
+              disabled={!game || index === max}
+            />
           </div>
         </section>
 
-        {/* 解説・棋譜 */}
+        {/* ── サイドパネル: 棋譜読み込み + 手順表 + 解説 ── */}
         <aside className="flex flex-col gap-4">
-          <details open className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-            <summary className="cursor-pointer text-sm font-semibold">
+          {/* PGN 読み込みセクション */}
+          <details open className="group rounded-xl border border-border bg-surface-2 p-4">
+            <summary className="focus-ai -m-1 cursor-pointer rounded p-1 text-sm font-semibold text-on-surface">
               棋譜を読み込む（PGN）
             </summary>
-            <textarea
-              value={pgnText}
-              onChange={(e) => setPgnText(e.target.value)}
-              rows={5}
-              className="mt-2 w-full rounded-md border border-slate-300 p-2 font-mono text-xs dark:border-slate-600 dark:bg-slate-900"
-            />
-            <button
-              onClick={handleLoad}
-              className="mt-2 rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"
-            >
-              読み込む
-            </button>
-            {error && <p className="mt-2 text-sm text-rose-600">{error}</p>}
+
+            <div className="mt-3 flex flex-col gap-2">
+              <textarea
+                value={pgnText}
+                onChange={(e) => setPgnText(e.target.value)}
+                rows={5}
+                spellCheck={false}
+                /* フォント: monospace を明示。日本語入力時も崩れない。 */
+                className="w-full rounded-lg border border-border bg-surface p-2.5 font-mono text-xs text-on-surface placeholder:text-subtle focus:border-ai focus:outline-none"
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleLoad}
+                  /* 藍アクセントのプライマリアクション */
+                  className="focus-ai rounded-lg bg-ai px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-ai-hover dark:bg-ai-dim dark:hover:bg-ai"
+                >
+                  読み込む
+                </button>
+                {error && (
+                  /* text-[var(--q-miss-fg)]: q-miss 変数は @theme 外なので任意値で参照 */
+                  <p className="text-xs text-[var(--q-miss-fg)]" role="alert">
+                    {error}
+                  </p>
+                )}
+              </div>
+            </div>
           </details>
 
+          {/* 手順表 */}
           {game && (
             <MoveList
               moves={game.moves}
@@ -240,8 +323,9 @@ export function ReviewView() {
             />
           )}
 
-          <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-            <h2 className="mb-2 text-sm font-semibold">解説・対話</h2>
+          {/* 解説パネル */}
+          <div className="rounded-xl border border-border bg-surface-2 p-4">
+            <h2 className="mb-3 text-sm font-semibold text-on-surface">解説・対話</h2>
             <ExplanationPanel
               context={currentContext}
               explanation={index >= 1 ? (explanations[currentPly] ?? null) : null}
@@ -257,20 +341,31 @@ export function ReviewView() {
   );
 }
 
+/*
+ * NavButton — ナビゲーションボタン
+ *
+ * ariaLabel を追加: label が「◀」のような記号のみの場合、スクリーンリーダーが
+ * 意味を読み上げられないため aria-label で補完する。
+ * min-h-11: 44px タップ領域確保(WCAG 2.5.5 / Apple HIG)。
+ */
 function NavButton({
   label,
+  ariaLabel,
   onClick,
   disabled,
 }: {
   label: string;
+  ariaLabel: string;
   onClick: () => void;
   disabled?: boolean;
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded-md border border-slate-300 px-3 py-1 text-sm hover:bg-slate-200 disabled:opacity-40 dark:border-slate-600 dark:hover:bg-slate-700"
+      aria-label={ariaLabel}
+      className="focus-ai min-h-11 min-w-11 rounded-lg border border-border px-3 text-sm text-on-surface transition-colors hover:bg-surface-2 disabled:opacity-30"
     >
       {label}
     </button>
