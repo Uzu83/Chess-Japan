@@ -35,7 +35,7 @@ export function localExplanation(req: ExplainRequest): string {
   if (mode === 'followup') {
     return `（ローカル簡易応答）「${question ?? ''}」について：現在の局面評価は ${evalText(
       c.evalAfter,
-    )} です。詳しい対話解説には解説バックエンド(Grok)の設定が必要です。`;
+    )} です。詳しい対話解説にはAI解説バックエンドの設定が必要です。`;
   }
   const quality = c.quality ? qualityLabelJa(c.quality as MoveQuality) : '判定なし';
   const best =
@@ -44,7 +44,7 @@ export function localExplanation(req: ExplainRequest): string {
       : 'これはエンジン最善手と一致します。';
   return `この手は「${quality}」です。指す前の評価は ${evalText(
     c.evalBefore,
-  )}、指した後は ${evalText(c.evalAfter)}。${best}（より自然な解説には Grok バックエンドの設定が必要です）`;
+  )}、指した後は ${evalText(c.evalAfter)}。${best}（より自然な解説にはAI解説バックエンドの設定が必要です）`;
 }
 
 /** Edge Function を呼んで解説/応答テキストを得る。未設定ならローカル簡易解説。 */
