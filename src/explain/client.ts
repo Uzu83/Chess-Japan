@@ -1,5 +1,6 @@
 import type { ExplanationContext, KnowledgeProfile, MoveQuality } from '../core/types';
 import { qualityLabelJa } from '../core/classify';
+import { getTurnstileToken } from './turnstile';
 
 export type ExplainMode = 'explain' | 'followup';
 
@@ -51,12 +52,17 @@ export async function requestExplanation(req: ExplainRequest): Promise<string> {
   if (!isBackendConfigured()) {
     return localExplanation(req);
   }
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${SUPABASE_ANON}`,
+  };
+  // Turnstile 有効時のみ、リクエスト毎の新鮮なトークンを x-turnstile-token に付与（#2）。
+  // 未設定なら null で無付与（バックエンドも非課金環境では検証 skip）。単発トークンなので都度取得。
+  const turnstileToken = await getTurnstileToken();
+  if (turnstileToken) headers['x-turnstile-token'] = turnstileToken;
   const res = await fetch(`${SUPABASE_URL}/functions/v1/explain`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${SUPABASE_ANON}`,
-    },
+    headers,
     body: JSON.stringify(req),
   });
   if (!res.ok) {
