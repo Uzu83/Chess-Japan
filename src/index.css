@@ -66,6 +66,19 @@
   :root {
     color-scheme: light dark;
 
+    /* ── 評価グラフ CSS 変数 ──
+       SVG は Tailwind の bg-xx や text-xx クラスが届かないため、
+       ここで CSS 変数を定義して SVG の style 属性から var() で参照する。
+       ダーク上書きは @media (prefers-color-scheme: dark) ブロックにある。
+
+       WHY rgba(): 背景(bg-surface-2)が透けて見えることでグラフと
+       カードが一体化して見える。不透明にすると浮いて見える。         */
+    --graph-white-fill: rgba(247, 243, 234, 0.85); /* washi 薄め: 白優勢エリア */
+    --graph-black-fill: rgba(44, 38, 34, 0.55); /* sumi-ink 薄め: 黒優勢エリア */
+    --graph-line: #3b5ea6; /* ai-iro(藍): 評価折れ線 */
+    --graph-zero: #d4cbb8; /* washi-muted: 互角ライン */
+    --graph-marker: #3b5ea6; /* ai-iro: 現在手マーカー */
+
     /* ── 手の質バッジ — ライトモード ──
        色相は lichess 準拠(best=青, good=緑, inaccuracy=黄, mistake=橙, blunder=赤)、
        彩度を和紙の世界観に落としてテンプレ感を消す。
@@ -85,6 +98,15 @@
 
   @media (prefers-color-scheme: dark) {
     :root {
+      /* ── 評価グラフ — ダーク上書き ──
+         SVG は Tailwind の bg-xx や text-xx が届かないため CSS 変数を直接参照する。
+         ライトモードの値は :root で設定済み。ダークで上書きする。       */
+      --graph-white-fill: rgba(58, 53, 48, 0.7); /* sumi-border tint: 背景より少し明るい */
+      --graph-black-fill: rgba(8, 6, 4, 0.85); /* near-black: 背景より暗く押さえる */
+      --graph-line: #8aaad4; /* ai-muted: ダーク時は明るい藍 */
+      --graph-zero: #3a3530; /* sumi-border */
+      --graph-marker: #8aaad4;
+
       /* セマンティックトークン — ダーク上書き */
       --color-surface: #1e1a17;
       --color-surface-2: #272320;
