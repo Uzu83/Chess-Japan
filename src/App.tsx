@@ -75,7 +75,7 @@ function App() {
           <p className="text-xs text-subtle">
             Stockfish・chessground:{' '}
             <a
-              href="https://github.com/toshikidev/chess-japan"
+              href="https://github.com/Uzu83/Chess-Japan"
               target="_blank"
               rel="noreferrer"
               className="focus-ai underline-offset-2 hover:underline"

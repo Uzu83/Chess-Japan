@@ -835,7 +835,7 @@ export function ReviewView() {
                     className="h-1.5 overflow-hidden rounded-full bg-border"
                   >
                     <div
-                      className="h-full bg-ai transition-all duration-300 motion-safe:transition-all dark:bg-ai-muted"
+                      className="h-full bg-ai duration-300 motion-safe:transition-all dark:bg-ai-muted"
                       style={{
                         width: `${(analyzeAllProgress.done / analyzeAllProgress.total) * 100}%`,
                       }}
