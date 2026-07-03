@@ -1,12 +1,22 @@
-import { useMemo, useId } from 'react';
+import { useMemo, useId, useState } from 'react';
 import type { ExplanationContext, MoveRecord } from '../core/types';
-import { normalizeEvalToWhiteCp, GRAPH_CLAMP_CP } from '../core/evalUtils';
+import { normalizeEvalToWhiteCp, GRAPH_CLAMP_CP, formatEvalCp } from '../core/evalUtils';
+import { qualityLabelJa } from '../core/classify';
 
 /*
  * EvalGraph — 評価グラフ
  *
  * 全手の評価推移を折れ線/エリアで描画する。
  * 重いチャートライブラリ不使用 — 素の SVG で実装。
+ *
+ * 強化点(2025-07以降):
+ *   - ホバー/フォーカスでツールチップ: 手数・評価値・手の質を表示。
+ *     マウス位置を fraction (0..1) で保持し CSS % で tooltip を配置する。
+ *     右端近く(fraction > 0.65)では tooltip を左へ反転して overflow を回避。
+ *   - 詰み終端の修正: エンジンが詰み局面(合法手なし)で cp:0 を返すと
+ *     グラフが中央に戻る問題を修正。最終 ply が false-zero の場合は
+ *     evalBefore(指す前の優位)を代わりに使ってグラフを端に張り付かせる。
+ *   - 現在手マーカー強化: ドットに白ストロークリングを追加して視認性向上。
  *
  * ── 座標系 ──────────────────────────────────────────────────
  *   viewBox: 0 0 200 50
@@ -44,6 +54,17 @@ const VB_H = 50;
 /** 互角ライン(y=0 cp)の Y 座標。 */
 const MID = VB_H / 2; // 25
 
+/** ツールチップのホバー状態。 */
+interface TooltipState {
+  /** カーソルの SVG 幅に対する割合(0..1)。CSS % で tooltip を配置するのに使う。 */
+  fraction: number;
+  /** カーソルの SVG 高さに対する割合(0..1)。tooltip の上端位置に使う。 */
+  yFraction: number;
+  ply: number;
+  whiteCp: number;
+  quality: ExplanationContext['quality'];
+}
+
 interface EvalGraphProps {
   moves: MoveRecord[];
   /** 解析済みコンテキスト。キー=ply(0始まり)。 */
@@ -77,6 +98,9 @@ export function EvalGraph({ moves, contexts, currentIndex, onSeek }: EvalGraphPr
   const clipTop = `${uid}-top`;
   const clipBot = `${uid}-bot`;
 
+  // ── ツールチップ状態 ──────────────────────────────────────
+  const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+
   const total = moves.length;
 
   // 解析済みのデータ点を ply 昇順で構築
@@ -86,10 +110,30 @@ export function EvalGraph({ moves, contexts, currentIndex, onSeek }: EvalGraphPr
       const ctx = contexts[ply];
       // evalAfter が未定義(解析なし)はスキップ
       if (ctx?.evalAfter !== undefined) {
-        pts.push({
-          ply,
-          whiteCp: normalizeEvalToWhiteCp(ctx.evalAfter, moves[ply].color),
-        });
+        let whiteCp = normalizeEvalToWhiteCp(ctx.evalAfter, moves[ply].color);
+
+        // ── 詰み終端の false-zero 修正 ──────────────────────
+        // 問題: エンジンが詰み後の局面(合法手なし)を解析すると cp:0 を返すことがあり、
+        //       グラフの最終点が中央(互角)に戻ってしまう見た目上の誤りが生じる。
+        // 修正: 最終 ply だけを対象に、whiteCp が 0 かつ evalBefore が
+        //       大きな優勢を示している場合は evalBefore の符号で端に張り付かせる。
+        //
+        // WHY evalBefore > 800 の閾値:
+        //   通常の終盤では 800cp の優位は滅多にない(ほぼ詰み・駒大損の局面のみ)。
+        //   この閾値を超えているならエンジンの false-zero と判断して安全。
+        const isLastPly = ply === total - 1;
+        if (
+          isLastPly &&
+          whiteCp === 0 &&
+          ctx.evalBefore !== undefined &&
+          Math.abs(ctx.evalBefore) > 800
+        ) {
+          // evalBefore は「指したプレイヤー視点」なので白視点に変換してクランプ
+          const evalBeforeWhite = moves[ply].color === 'w' ? ctx.evalBefore : -ctx.evalBefore;
+          whiteCp = Math.max(-GRAPH_CLAMP_CP, Math.min(GRAPH_CLAMP_CP, evalBeforeWhite));
+        }
+
+        pts.push({ ply, whiteCp });
       }
     }
     return pts;
@@ -143,6 +187,8 @@ export function EvalGraph({ moves, contexts, currentIndex, onSeek }: EvalGraphPr
   // 手が1つもない場合は非表示
   if (total === 0) return null;
 
+  // ── SVGイベントハンドラ ──────────────────────────────────
+
   // SVGクリック → ply を推定して局面ジャンプ
   const handleClick = (e: React.MouseEvent<SVGSVGElement>) => {
     const svg = e.currentTarget;
@@ -154,6 +200,41 @@ export function EvalGraph({ moves, contexts, currentIndex, onSeek }: EvalGraphPr
     onSeek(Math.max(0, Math.min(total - 1, ply)) + 1);
   };
 
+  // マウス移動 → 最近傍解析点のツールチップを表示
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (points.length === 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const yFraction = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    // 割合から ply を推定
+    const targetPly = Math.round(fraction * (total - 1));
+
+    // 最近傍の解析済み点を探す
+    const nearest = points.reduce((a, b) =>
+      Math.abs(a.ply - targetPly) <= Math.abs(b.ply - targetPly) ? a : b,
+    );
+
+    setTooltip({
+      fraction,
+      yFraction,
+      ply: nearest.ply,
+      whiteCp: nearest.whiteCp,
+      quality: contexts[nearest.ply]?.quality,
+    });
+  };
+
+  const handleMouseLeave = () => setTooltip(null);
+
+  // ── ツールチップのコンテンツ ────────────────────────────────
+  // 手番号: 1始まり(e.g. ply=3 → "2...d5 (黒)")
+  const tooltipContent = tooltip
+    ? {
+        moveLabel: `${Math.floor(tooltip.ply / 2) + 1}${tooltip.ply % 2 === 1 ? '...' : '.'} ${moves[tooltip.ply]?.san ?? ''} (${tooltip.ply % 2 === 0 ? '白' : '黒'})`,
+        evalLabel: formatEvalCp(tooltip.whiteCp),
+        qualityLabel: tooltip.quality ? qualityLabelJa(tooltip.quality) : null,
+      }
+    : null;
+
   return (
     <div
       role="img"
@@ -164,6 +245,8 @@ export function EvalGraph({ moves, contexts, currentIndex, onSeek }: EvalGraphPr
         viewBox={`0 0 ${VB_W} ${VB_H}`}
         preserveAspectRatio="none"
         onClick={handleClick}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
         className="block w-full cursor-pointer"
         style={{ height: '72px' }}
         aria-hidden="true"
@@ -237,11 +320,55 @@ export function EvalGraph({ moves, contexts, currentIndex, onSeek }: EvalGraphPr
           />
         )}
 
-        {/* 現在手のドット — 評価値が分かる手のみ表示 */}
+        {/* 現在手のドット
+            WHY 白ストロークリング:
+              ダーク/ライト両モードで点がグラフ線と紛れないよう白ハロを付ける。
+              r=2.5 + strokeWidth=1 = 実効半径 3.5 程度で十分に視認できる。 */}
         {currentX !== null && currentY !== null && (
-          <circle cx={currentX} cy={currentY} r="2" style={{ fill: 'var(--graph-marker)' }} />
+          <>
+            {/* 外側リング(白) — 背景に溶け込まないためのコントラスト補助 */}
+            <circle
+              cx={currentX}
+              cy={currentY}
+              r="3"
+              fill="white"
+              fillOpacity="0.6"
+              aria-hidden="true"
+            />
+            {/* 内側ドット(マーカー色) */}
+            <circle cx={currentX} cy={currentY} r="2" style={{ fill: 'var(--graph-marker)' }} />
+          </>
         )}
       </svg>
+
+      {/* ── ツールチップ ──────────────────────────────────────
+          pointer-events-none でマウスイベントを素通しにし、SVG の onMouseMove を妨げない。
+          fraction に基づく % 位置で配置。右寄り(fraction > 0.65)なら translateX(-100%) で
+          tooltip 本体を左に反転させ右端からの overflow を回避する。              */}
+      {tooltip && tooltipContent && (
+        <div
+          role="tooltip"
+          className="pointer-events-none absolute z-20 w-28 rounded border border-border bg-surface px-2 py-1 text-[10px] shadow-md"
+          style={{
+            left: `${tooltip.fraction * 100}%`,
+            // 上端への過剰な重なりを避けるため yFraction で調整
+            top: tooltip.yFraction < 0.5 ? '50%' : '0%',
+            transform: tooltip.fraction > 0.65 ? 'translateX(-100%)' : 'translateX(6px)',
+          }}
+        >
+          {/* 手表記: "2. Nf3 (白)" */}
+          <div className="truncate font-mono font-medium text-on-surface">
+            {tooltipContent.moveLabel}
+          </div>
+          {/* 評価値 · 手の質 */}
+          <div className="mt-0.5 text-muted">
+            {tooltipContent.evalLabel}
+            {tooltipContent.qualityLabel && (
+              <span className="text-subtle"> · {tooltipContent.qualityLabel}</span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 未解析ラベル: 何も解析されていなければ中央に案内テキスト */}
       {analyzedCount === 0 && (

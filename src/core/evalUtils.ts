@@ -1,5 +1,41 @@
 import type { ExplanationContext, MoveQuality, MoveRecord } from './types';
 
+// ── 評価値フォーマット ─────────────────────────────────────────
+
+/**
+ * 白視点センチポーン(生値・クランプなし)を表示用の短い文字列に変換する。
+ *
+ * WHY 99000 の閾値:
+ *   scoreToCp(mate:1) = 99999, scoreToCp(mate:2) = 99998 ...
+ *   scoreToCp(mate:100) = 99900。実用上の詰み値はすべて 99000 以上になる。
+ *   通常の棋譜で |evalAfter| が 99000 以上になるのは詰み以外にない。
+ *
+ * 用途: MoveList の評価列・EvalGraph ツールチップ。
+ *
+ * @param whiteCp 白視点センチポーン(正=白有利 / 負=黒有利)
+ */
+export function formatEvalCp(whiteCp: number): string {
+  if (whiteCp >= 99000) return '+M';
+  if (whiteCp <= -99000) return '-M';
+  const pawns = whiteCp / 100;
+  return (pawns >= 0 ? '+' : '') + pawns.toFixed(1);
+}
+
+/**
+ * ExplanationContext の evalAfter と手番色から白視点の表示文字列を返す。
+ *
+ * evalAfter は「指したプレイヤー視点」のため、黒が指した後は符号反転して白視点に揃える。
+ * normalizeEvalToWhiteCp と同じ変換だが、GRAPH_CLAMP_CP でクランプしない
+ * (詰み値の検出を正確に行うため)。
+ *
+ * @param evalAfter ExplanationContext.evalAfter の値(手番側視点 cp)
+ * @param color     手を指したプレイヤー
+ */
+export function formatMoveEval(evalAfter: number, color: 'w' | 'b'): string {
+  const whiteCp = color === 'w' ? evalAfter : -evalAfter;
+  return formatEvalCp(whiteCp);
+}
+
 /**
  * グラフ描画における評価値の飽和上限(cp)。
  *
