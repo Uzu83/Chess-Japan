@@ -63,7 +63,12 @@ export function MoveList({ moves, currentIndex, qualities, onSelect, contexts }:
     const ply = currentIndex - 1;
     const el = listRef.current?.querySelector(`[data-ply="${ply}"]`);
     if (!el) return;
-    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    // prefers-reduced-motion を尊重(reviewer M-2)。本リポは motion-safe: 方針なのでスムーススクロールも従わせる。
+    const reduce =
+      typeof window !== 'undefined' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // block:'nearest' で「見えていれば動かさない・必要最小限だけ動かす」→ 祖先(ページ)ジャンプを抑制。
+    el.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
   }, [currentIndex]);
 
   const rows: { no: number; white?: MoveRecord; black?: MoveRecord }[] = [];
