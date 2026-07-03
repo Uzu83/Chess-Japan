@@ -2,13 +2,108 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
+
+    <!-- ── ファビコン ──
+         apple-touch-icon を追加: iOS ホーム画面追加・ブックマーク時のアイコン。
+         SVG を直接指定（iOS 15.4+ 対応）。PNG 変換で互換性を上げることを推奨。 -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+
+    <!-- ── ビューポート ── -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+    <!-- ── 基本メタ ──
+         title: 主要キーワード(棋譜・AI・解説)を前半に置く。
+         description: 50-160 字・自然な文体・検索意図(棋譜解説/AI/無料/Stockfish)を含む。 -->
+    <title>Chess-Japan｜チェス・将棋の棋譜をAIが1手ずつ解説する無料ツール</title>
     <meta
       name="description"
-      content="チェス・将棋の1手1手を、オープンソースAIとLLMで丁寧に解説するWebアプリ"
+      content="チェス・将棋の棋譜（PGN）を読み込むだけ。Stockfish の評価値をもとに LLM が1手ずつ日本語で解説。悪手の理由・最善手・評価値グラフを無料で確認できる棋譜レビューツール。"
     />
-    <title>Chess-Japan — 1手解説AI</title>
+
+    <!-- カラースキーム: ライト/ダーク両対応を宣言（index.css の color-scheme と連動） -->
+    <meta name="color-scheme" content="light dark" />
+
+    <!-- theme-color: ブラウザ UI の配色をアプリのテーマに合わせる。
+         ライト = 和紙(washi #f7f3ea) / ダーク = 墨(sumi #1e1a17)
+         media 属性でモードごとに 2 件指定（仕様: https://github.com/nicowillis/theme-color-meta）。 -->
+    <meta name="theme-color" content="#f7f3ea" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1e1a17" media="(prefers-color-scheme: dark)" />
+
+    <!-- Canonical: Cloudflare Pages の本番 URL を指定。
+         TODO: カスタムドメイン取得後はここを更新すること。
+         例: <link rel="canonical" href="https://chess-japan.com/" /> -->
+    <link rel="canonical" href="https://chess-japan.pages.dev/" />
+
+    <!-- クローラー: 本番は index 許可（noindex はステージング環境の _headers で付与） -->
+    <meta name="robots" content="index, follow" />
+
+    <!-- ── OGP (Open Graph Protocol) ──
+         SNS シェア・リンクプレビュー用。og:image は PNG(public/og.png・1200×630)を使用。
+         (og.svg をブラウザでラスタライズして生成。SNS は SVG の og:image 非対応のため PNG が必須。) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Chess-Japan" />
+    <meta
+      property="og:title"
+      content="Chess-Japan｜チェス・将棋の棋譜をAIが1手ずつ解説する無料ツール"
+    />
+    <meta
+      property="og:description"
+      content="棋譜（PGN）を貼るだけ。Stockfish の評価値 × LLM が1手ずつ日本語で解説します。悪手の理由・最善手・評価値グラフを無料で確認。"
+    />
+    <meta property="og:url" content="https://chess-japan.pages.dev/" />
+    <meta property="og:locale" content="ja_JP" />
+    <meta property="og:image" content="https://chess-japan.pages.dev/og.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="Chess-Japan — チェス・将棋の棋譜をAIが1手ずつ解説する無料ツール"
+    />
+
+    <!-- ── Twitter / X Card ──
+         summary_large_image: 大きいバナー形式で表示。
+         twitter:image も PNG を推奨（SVG は X のカード validator が非対応）。 -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="Chess-Japan｜チェス・将棋の棋譜をAIが1手ずつ解説する無料ツール"
+    />
+    <meta
+      name="twitter:description"
+      content="棋譜（PGN）を貼るだけ。Stockfish の評価値 × LLM が1手ずつ日本語で解説します。悪手の理由・最善手・評価値グラフを無料で確認。"
+    />
+    <meta name="twitter:image" content="https://chess-japan.pages.dev/og.png" />
+    <meta name="twitter:image:alt" content="Chess-Japan — チェス・将棋の棋譜をAIが1手ずつ解説" />
+
+    <!-- ── JSON-LD 構造化データ ──
+         WebApplication スキーマ: Google リッチリザルト・知識グラフへの情報提供。
+         applicationCategory=GameApplication: チェス/将棋はゲームカテゴリが最も近い。
+         offers.price=0: 無料ツールであることを明示。
+         WHY JSON-LD を <head> に置く: Google は <body> 内も認識するが <head> が推奨。 -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Chess-Japan",
+        "url": "https://chess-japan.pages.dev/",
+        "description": "チェス・将棋の棋譜（PGN）を1手ずつ LLM が日本語で解説する無料 Web ツール。Stockfish の評価値・最善手・悪手の理由を分かりやすく解説します。",
+        "applicationCategory": "GameApplication",
+        "operatingSystem": "Web",
+        "inLanguage": "ja",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "JPY"
+        }
+      }
+    </script>
+
+    <!-- ── PWA Web App Manifest ──
+         Service Worker は意図的に導入しない（COEP credentialless 下のキャッシュ複雑化回避）。
+         将来の Service Worker 導入は docs/PLAN.md Phase 6 以降で検討する。 -->
+    <link rel="manifest" href="/manifest.webmanifest" />
   </head>
   <body>
     <div id="root"></div>
