@@ -1,4 +1,10 @@
-import { normalizeEvalToWhiteCp, computeAccuracySummary, GRAPH_CLAMP_CP } from './evalUtils';
+import {
+  normalizeEvalToWhiteCp,
+  computeAccuracySummary,
+  GRAPH_CLAMP_CP,
+  formatEvalCp,
+  formatMoveEval,
+} from './evalUtils';
 import type { ExplanationContext, MoveRecord } from './types';
 
 // ── テストヘルパー ────────────────────────────────────────────
@@ -123,5 +129,57 @@ describe('computeAccuracySummary', () => {
 
     expect(s.white.blunder).toBe(2);
     expect(s.whiteTotal).toBe(2);
+  });
+});
+
+// ── formatEvalCp ─────────────────────────────────────────────
+
+describe('formatEvalCp', () => {
+  it('正の値は "+" 符号付きで表示する', () => {
+    expect(formatEvalCp(120)).toBe('+1.2');
+    expect(formatEvalCp(50)).toBe('+0.5');
+    expect(formatEvalCp(0)).toBe('+0.0');
+  });
+
+  it('負の値は "-" 符号付きで表示する', () => {
+    expect(formatEvalCp(-75)).toBe('-0.8');
+    expect(formatEvalCp(-200)).toBe('-2.0');
+  });
+
+  it('|cp| >= 99000 は詰み記号 "+M" / "-M" を返す', () => {
+    expect(formatEvalCp(99999)).toBe('+M'); // scoreToCp(mate:1) 相当
+    expect(formatEvalCp(-99999)).toBe('-M'); // 黒詰み
+    expect(formatEvalCp(99000)).toBe('+M'); // 閾値ちょうど
+    expect(formatEvalCp(-99000)).toBe('-M');
+  });
+
+  it('98999 はまだ詰み記号を返さない(閾値の境界)', () => {
+    expect(formatEvalCp(98999)).toBe('+990.0');
+    expect(formatEvalCp(-98999)).toBe('-990.0');
+  });
+});
+
+// ── formatMoveEval ────────────────────────────────────────────
+
+describe('formatMoveEval', () => {
+  it('白が指した後: evalAfter をそのまま白視点として表示', () => {
+    // evalAfter=120 (白有利) → 白視点 +120 → "+1.2"
+    expect(formatMoveEval(120, 'w')).toBe('+1.2');
+    // evalAfter=-50 (白不利) → 白視点 -50 → "-0.5"
+    expect(formatMoveEval(-50, 'w')).toBe('-0.5');
+  });
+
+  it('黒が指した後: evalAfter を符号反転して白視点に', () => {
+    // evalAfter=100 (黒有利) → 白視点 -100 → "-1.0"
+    expect(formatMoveEval(100, 'b')).toBe('-1.0');
+    // evalAfter=-80 (黒不利=白有利) → 白視点 +80 → "+0.8"
+    expect(formatMoveEval(-80, 'b')).toBe('+0.8');
+  });
+
+  it('詰み値も正しく符号変換した上で "+M" / "-M" を返す', () => {
+    // 白が詰みを決めた: evalAfter=99999 → 白視点 +99999 → "+M"
+    expect(formatMoveEval(99999, 'w')).toBe('+M');
+    // 黒が詰みを決めた: evalAfter=99999 → 白視点 -99999 → "-M"
+    expect(formatMoveEval(99999, 'b')).toBe('-M');
   });
 });

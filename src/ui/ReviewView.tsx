@@ -6,6 +6,15 @@ import type { ExplanationContext, KnowledgeProfile, MoveQuality } from '../core/
 import type { ChessEngine } from '../engine/types';
 import { createEngine, type EngineKind } from '../engine/factory';
 import { requestExplanation } from '../explain/client';
+import {
+  hashPgn,
+  loadContextsFromStorage,
+  saveContextsToStorage,
+  loadSessionFromStorage,
+  saveSessionToStorage,
+  encodePgnForUrl,
+  decodePgnFromUrl,
+} from '../core/storage';
 import { Board } from './Board';
 import { EvalBar } from './EvalBar';
 import { EvalGraph } from './EvalGraph';
@@ -21,6 +30,13 @@ const LEVEL_LABEL: Record<NonNullable<KnowledgeProfile['level']>, string> = {
   advanced: '上級',
 };
 
+/**
+ * 共有URLに含められる PGN の最大文字数。
+ * 5000文字 ≈ base64url で約 7000文字。一般的なブラウザの URL 上限 (≈2MB) より十分小さい。
+ * 短い対局(〜100手)はほぼ全て収まる。超過時はコピーボタンを無効化+注記で通知する。
+ */
+const SHARE_MAX_PGN_CHARS = 5000;
+
 /*
  * ReviewView — 棋譜振り返り画面
  *
@@ -34,12 +50,26 @@ const LEVEL_LABEL: Record<NonNullable<KnowledgeProfile['level']>, string> = {
  *   - contexts:           ply → ExplanationContext (エンジン解析結果キャッシュ)
  *   - analyzeAllProgress: 全手解析の進捗 {done, total} | null
  *   - orientation:        盤の向き 'white' | 'black'
+ *   - loadedPgn:          最後に正常ロードできた PGN テキスト(localStorage 保存用)
+ *   - hintDismissed:      使い方ヒントバナーを閉じたか
+ *   - autoExplain:        手を進めたら自動解説(既定 OFF)
  *
  * キャンセルトークン方式:
  *   - analyzeToken: 単手解析(useEffect)用。手の変更や棋譜再読み込みでキャンセル。
  *   - bulkTokenRef: 全手解析(handleAnalyzeAll)用。別管理することで
  *     ナビゲーション(setIndex)が全手解析を中断しないようにしている。
- *     棋譜再読み込み(handleLoad)とアンマウントでのみ中断。
+ *     棋譜再読み込み(loadPgn)とアンマウントでのみ中断。
+ *
+ * localStorage 永続化:
+ *   - セッション(最後の PGN・level・orientation・ヒント既読)を起動時に復元。
+ *   - 解析済みコンテキストを PGN ハッシュキーで保存。同一棋譜を再ロード時は
+ *     再解析なしに badges/グラフ/精度を即復元する。
+ *   - QuotaExceeded/破損は try/catch で握り、UI への影響ゼロ。
+ *
+ * 起動時の PGN ロード優先順位:
+ *   1. URL ハッシュ (#g=<base64url>) — 共有リンクから開いた場合
+ *   2. localStorage セッション — 前回終了時の棋譜
+ *   3. SAMPLE_PGN の自動ロード — 初回訪問・セッションなし
  */
 
 export function ReviewView() {
@@ -56,6 +86,18 @@ export function ReviewView() {
   const [threads, setThreads] = useState<Record<number, ChatTurn[]>>({});
   const [level, setLevel] = useState<NonNullable<KnowledgeProfile['level']>>('beginner');
 
+  // 最後に正常ロードした PGN(セッション保存・コンテキスト保存のキー)
+  const [loadedPgn, setLoadedPgn] = useState<string | null>(null);
+
+  // ヒントバナー既読状態
+  const [hintDismissed, setHintDismissed] = useState(false);
+
+  // 自動解説トグル(既定 OFF — コスト暴発防止)
+  const [autoExplain, setAutoExplain] = useState(false);
+
+  // 共有リンクコピー状態(コピー後 2 秒間フィードバック表示)
+  const [shareCopied, setShareCopied] = useState(false);
+
   // 全手解析の進捗 (null = 非実行中)
   const [analyzeAllProgress, setAnalyzeAllProgress] = useState<{
     done: number;
@@ -69,6 +111,19 @@ export function ReviewView() {
   const bulkTokenRef = useRef(0);
   // 全手解析の二重起動ガード
   const isAnalyzingAllRef = useRef(false);
+
+  // ── 自動解説用 ref(stale closure 対策) ─────────────────────
+  // timeout 内でも最新の状態を参照できるよう ref に同期する。
+  // WHY useEffect でなく直接代入か: effect だとレンダー後に更新されるが、
+  // ここでは render phase での同期が必要なため直接代入で OK。
+  const contextsRef = useRef(contexts);
+  contextsRef.current = contexts;
+  const explanationsRef = useRef(explanations);
+  explanationsRef.current = explanations;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  // onExplain の最新版を ref に保持(onExplain 自体はレンダーごとに再生成される)
+  const onExplainRef = useRef<(() => Promise<void>) | null>(null);
 
   // ── エンジン初期化 ──────────────────────────────────────────
   useEffect(() => {
@@ -91,7 +146,6 @@ export function ReviewView() {
   // アンマウント時に全手解析をキャンセルする専用 cleanup。
   // WHY 分離: エンジン cleanup と混在させると react-hooks/exhaustive-deps が
   // 「ref.current をクリーンアップ内で使うな」と警告するため別 effect にする。
-  // bulkTokenRef はオブジェクト参照が安定しているため effect 内でキャプチャ不要。
   useEffect(() => {
     const ref = bulkTokenRef;
     return () => {
@@ -99,25 +153,113 @@ export function ReviewView() {
     };
   }, []);
 
-  // ── 棋譜読み込み ─────────────────────────────────────────────
-  const handleLoad = useCallback(() => {
-    try {
-      const g = ChessGame.fromPgn(pgnText);
-      if (g.length === 0) throw new Error('手が見つかりません');
-      setGame(g);
-      setIndex(0);
-      setContexts({});
-      setExplanations({});
-      setThreads({});
-      setError(null);
-      // 新しい棋譜読み込みで全手解析をキャンセル
-      ++bulkTokenRef.current;
-      setAnalyzeAllProgress(null);
-    } catch (e) {
-      setError(`PGN を読み込めませんでした: ${(e as Error).message}`);
-      setGame(null);
+  // ── 棋譜ロードのコア関数 ────────────────────────────────────
+  /*
+   * loadPgn — PGN 文字列から ChessGame を構築し状態を更新する。
+   *
+   * useCallback の deps が [] なのは WHY:
+   *   setGame 等の useState setter はコンポーネントのライフタイム中で安定しているため
+   *   deps 省略で OK。ref 経由の操作も同様。
+   *   (eslint-plugin-react-hooks は安定 setter を自動で判断するため警告も出ない)
+   *
+   * restoreCtx=true の場合、PGN ハッシュで localStorage から解析結果を復元する。
+   * 同一棋譜をリロードしても再解析が不要になる。
+   */
+  const loadPgn = useCallback(
+    (pgn: string, opts?: { restoreCtx?: boolean }) => {
+      try {
+        const g = ChessGame.fromPgn(pgn);
+        if (g.length === 0) throw new Error('手が見つかりません');
+
+        // 解析済みコンテキストの復元(同一棋譜リロード最適化)
+        let savedCtx: Record<number, ExplanationContext> | null = null;
+        if (opts?.restoreCtx) {
+          savedCtx = loadContextsFromStorage(hashPgn(pgn));
+        }
+
+        setGame(g);
+        setIndex(0);
+        setContexts(savedCtx ?? {});
+        setExplanations({});
+        setThreads({});
+        setError(null);
+        setLoadedPgn(pgn);
+        // 全手解析キャンセル
+        ++bulkTokenRef.current;
+        setAnalyzeAllProgress(null);
+        // 単手解析トークンもリセット
+        ++analyzeToken.current;
+      } catch (e) {
+        setError(`PGN を読み込めませんでした: ${(e as Error).message}`);
+        setGame(null);
+        setLoadedPgn(null);
+      }
+    },
+    [], // useState setters は安定 → deps 不要
+  );
+
+  // ── 起動時の初期ロード ──────────────────────────────────────
+  /*
+   * 優先順位:
+   *   1. URL ハッシュ #g=<base64url> — 共有リンク
+   *   2. localStorage セッション — 前回の棋譜
+   *   3. SAMPLE_PGN — 初回訪問(空っぽで迎えない)
+   *
+   * WHY ここで loadPgn を呼ぶか:
+   *   handleLoad は pgnText state を読む(React のスナップショット)ため、
+   *   setPgnText 直後に呼んでも新しい値を見られない。
+   *   loadPgn は直接 pgn 文字列を引数に取るため、状態更新と同時に呼べる。
+   */
+  useEffect(() => {
+    // 1. URL ハッシュ
+    const hashMatch = window.location.hash.match(/[#&]g=([A-Za-z0-9\-_]*)/);
+    if (hashMatch?.[1]) {
+      const decoded = decodePgnFromUrl(hashMatch[1]);
+      if (decoded) {
+        setPgnText(decoded);
+        loadPgn(decoded);
+        return;
+      }
     }
-  }, [pgnText]);
+
+    // 2. localStorage セッション
+    const session = loadSessionFromStorage();
+    if (session) {
+      setPgnText(session.pgn);
+      setLevel(session.level);
+      setOrientation(session.orientation);
+      setHintDismissed(session.hintDismissed);
+      loadPgn(session.pgn, { restoreCtx: true });
+      return;
+    }
+
+    // 3. サンプル自動ロード(初回訪問 → 空画面でなく対局が見える状態で出迎える)
+    loadPgn(SAMPLE_PGN);
+    // pgnText の初期値は SAMPLE_PGN なので setPgnText は不要
+  }, [loadPgn]); // loadPgn は安定([] deps)なので依存に含めても一回だけ実行
+
+  // ── セッション永続化 ────────────────────────────────────────
+  // loadedPgn・level・orientation・hintDismissed が変わるたびに保存。
+  // loadedPgn が null のとき(ロード失敗)は保存しない。
+  useEffect(() => {
+    if (!loadedPgn) return;
+    saveSessionToStorage({ pgn: loadedPgn, level, orientation, hintDismissed });
+  }, [loadedPgn, level, orientation, hintDismissed]);
+
+  // ── 解析コンテキスト永続化 ─────────────────────────────────
+  // contexts が変わるたびに PGN ハッシュキーで保存。
+  // 全手解析中も逐次保存し、途中で閉じても再開時に復元できる。
+  // QuotaExceeded は saveContextsToStorage 内で握られる。
+  useEffect(() => {
+    if (!loadedPgn || Object.keys(contexts).length === 0) return;
+    saveContextsToStorage(hashPgn(loadedPgn), contexts);
+  }, [loadedPgn, contexts]);
+
+  // ── 棋譜読み込み(ボタン押下) ────────────────────────────────
+  const handleLoad = useCallback(() => {
+    // ボタン経由ロードはコンテキスト復元あり(同一棋譜リロードを最適化)
+    loadPgn(pgnText, { restoreCtx: true });
+  }, [pgnText, loadPgn]);
 
   const profile: KnowledgeProfile = useMemo(() => ({ known: [], unknown: [], level }), [level]);
 
@@ -156,7 +298,7 @@ export function ReviewView() {
    *   await の間に setTimeout(0) を挟んで UI のブロックを防ぐ。
    *
    * キャンセル条件:
-   *   - 棋譜再読み込み(handleLoad が bulkTokenRef を更新)
+   *   - 棋譜再読み込み(loadPgn が bulkTokenRef を更新)
    *   - コンポーネントアンマウント(エンジン cleanup が bulkTokenRef を更新)
    *   - 二重起動は isAnalyzingAllRef でガード(analyzeAllProgress の state 更新前に
    *     同じ関数が呼ばれる可能性があるため ref を使う)
@@ -324,6 +466,9 @@ export function ReviewView() {
     }
   }, [currentContext, currentPly, profile]);
 
+  // onExplain の最新版を常に ref に同期(自動解説の stale closure 対策)
+  onExplainRef.current = onExplain;
+
   const onAsk = useCallback(
     async (question: string) => {
       if (!currentContext) return;
@@ -353,10 +498,97 @@ export function ReviewView() {
     [currentContext, currentPly, threads, profile],
   );
 
+  // ── 自動解説(デバウンス ~500ms) ─────────────────────────────
+  /*
+   * 設計:
+   *   index が変わる(手を進める)たびに 500ms タイマーをセット。
+   *   タイマー発火時に "解析済み context あり かつ 解説なし" を確認してから
+   *   onExplain を呼ぶ。全手解析中(analyzeAllProgress !== null)は発火させない。
+   *
+   * WHY ref を使って最新値を読むか:
+   *   effect 内の setTimeout コールバックは effect 実行時のクロージャを参照するため
+   *   contexts・explanations・busy・onExplain が古い値になる。
+   *   ref に render ごと最新値を同期することでこの問題を回避する。
+   *
+   * WHY deps が [index, autoExplain, analyzeAllProgress] だけか:
+   *   "手を進めたとき" だけに反応したい。contexts や explanations が変わっても
+   *   (全手解析中など)発火させないのが仕様。index と toggle と解析中フラグだけで十分。
+   */
+  useEffect(() => {
+    if (!autoExplain || analyzeAllProgress !== null) return;
+    if (index < 1) return;
+
+    const id = window.setTimeout(() => {
+      const ply = index - 1;
+      // ✅ ref 経由で最新の状態を参照 → stale closure 問題なし
+      if (!contextsRef.current[ply]) return; // 未解析
+      if (explanationsRef.current[ply] !== undefined) return; // 既解説済み
+      if (busyRef.current) return; // 別のリクエスト実行中
+      onExplainRef.current?.();
+    }, 500);
+
+    return () => window.clearTimeout(id);
+  }, [index, autoExplain, analyzeAllProgress]);
+  // ^ 意図的に contexts/explanations/busy/onExplain を除外。
+  //   "ナビ後のデバウンス" のみ発火させたいため。最新値は ref 経由で参照。
+  //   ref.current へのアクセスは ESLint の exhaustive-deps チェック外のため警告なし。
+
+  // ── 共有URL ──────────────────────────────────────────────────
+  /*
+   * loadedPgn が SHARE_MAX_PGN_CHARS 以下なら URL ハッシュ付き共有URLを生成。
+   * 超過時は null → ボタン無効化 + 注記。
+   *
+   * WHY base64url か:
+   *   PGN はスペース・改行・特殊記号を含むため生のままではURLに使えない。
+   *   base64url はパディングなし・URL-safe で最も簡潔。
+   */
+  const shareUrl = useMemo(() => {
+    if (!loadedPgn || loadedPgn.length > SHARE_MAX_PGN_CHARS) return null;
+    const encoded = encodePgnForUrl(loadedPgn);
+    const url = new URL(window.location.href);
+    url.hash = `g=${encoded}`;
+    // 余分な query や hash を消して最小化
+    return url.toString();
+  }, [loadedPgn]);
+
+  const handleShareCopy = useCallback(async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2000);
+    } catch {
+      // clipboard API 未対応(古いブラウザ / 非 HTTPS)は無視
+    }
+  }, [shareUrl]);
+
   // ── JSX ──────────────────────────────────────────────────────
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">
+      {/* ── 使い方ヒントバナー(初回訪問 or ヒント未閉じ) ────────
+          game がロード済みのとき表示(自動ロード後に表示されるため空画面は避けられる)。
+          閉じた状態は localStorage セッションに保存される。                     */}
+      {!hintDismissed && game && (
+        <div
+          role="note"
+          aria-label="使い方ヒント"
+          className="mb-4 flex items-center gap-3 rounded-xl border border-border bg-ai-bg px-4 py-2.5 dark:bg-ai-deep"
+        >
+          <span className="flex-1 text-xs text-ai dark:text-ai-muted">
+            ← / → キーで手を送り、「全手を解析」で採点、手をクリックで解説します
+          </span>
+          <button
+            type="button"
+            aria-label="ヒントを閉じる"
+            onClick={() => setHintDismissed(true)}
+            className="focus-ai shrink-0 rounded px-2 py-0.5 text-xs text-ai opacity-60 transition-opacity hover:opacity-100 dark:text-ai-muted"
+          >
+            閉じる
+          </button>
+        </div>
+      )}
+
       {/* ── ツールバー(エンジン状態 + レベル切替) ── */}
       <div className="mb-5 flex flex-wrap items-center gap-2">
         <span className="text-xs text-subtle">
@@ -533,6 +765,34 @@ export function ReviewView() {
                   </p>
                 )}
               </div>
+
+              {/* 共有リンク ─────────────────────────────────────────
+                  loadedPgn がある場合のみ表示。SHARE_MAX_PGN_CHARS を超える棋譜は
+                  ボタンを無効化し注記を表示(コピーすると URL が壊れる可能性を排除)。
+                  WHY URL ハッシュか: クエリパラメータと違い、ハッシュはサーバーに
+                  送信されないためバックエンド側の処理が不要。SPA 向きの方式。   */}
+              {loadedPgn && (
+                <div className="flex flex-wrap items-center gap-2 border-t border-border pt-2">
+                  <button
+                    type="button"
+                    onClick={handleShareCopy}
+                    disabled={!shareUrl}
+                    title={
+                      !shareUrl
+                        ? `棋譜が ${SHARE_MAX_PGN_CHARS} 文字を超えているため共有できません`
+                        : '現在の棋譜の共有リンクをクリップボードにコピー'
+                    }
+                    className="focus-ai rounded-lg border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:border-ai hover:text-ai disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {shareCopied ? 'コピーしました！' : '共有リンクをコピー'}
+                  </button>
+                  {!shareUrl && (
+                    <span className="text-[10px] text-subtle">
+                      棋譜が長すぎます（上限 {SHARE_MAX_PGN_CHARS} 文字）
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </details>
 
@@ -583,15 +843,36 @@ export function ReviewView() {
                   </div>
                 </div>
               )}
+
+              {/* 自動解説トグル ─────────────────────────────────────
+                  既定 OFF: 毎手ごとに解説 API を呼ぶとコストが暴発するため。
+                  ユーザーが意識して ON にした場合のみ発火させる。
+                  全手解析中は発火させない(analyzeAllProgress !== null で抑制)。 */}
+              <div className="mt-3 border-t border-border pt-3">
+                <label className="flex cursor-pointer items-center gap-2 text-xs text-muted">
+                  <input
+                    type="checkbox"
+                    checked={autoExplain}
+                    onChange={(e) => setAutoExplain(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-[var(--color-ai)]"
+                    aria-label="手を進めたら自動で解説する（解析済みの手のみ・約500ms後に発火）"
+                  />
+                  手を進めたら自動解説
+                  <span className="text-subtle">（解析済みの手のみ・既定 OFF）</span>
+                </label>
+              </div>
             </div>
           )}
 
-          {/* 手順表 */}
+          {/* 手順表
+              contexts を渡して解析済み手に評価値を表示。
+              currentIndex が変わると自動スクロール(MoveList 内で制御)。 */}
           {game && (
             <MoveList
               moves={game.moves}
               currentIndex={index}
               qualities={qualities}
+              contexts={contexts}
               onSelect={setIndex}
             />
           )}
