@@ -73,7 +73,7 @@ function App() {
         <div className="mx-auto flex max-w-6xl items-center justify-between">
           {/* GPLv3 クレジット — プロジェクトの公開表記ポリシーに従い残す */}
           <p className="text-xs text-subtle">
-            Stockfish / chessground:{' '}
+            Stockfish・chessground:{' '}
             <a
               href="https://github.com/toshikidev/chess-japan"
               target="_blank"
