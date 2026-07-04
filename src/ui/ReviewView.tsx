@@ -72,8 +72,22 @@ const SHARE_MAX_PGN_CHARS = 5000;
  *   3. SAMPLE_PGN の自動ロード — 初回訪問・セッションなし
  */
 
-export function ReviewView() {
-  const [pgnText, setPgnText] = useState(SAMPLE_PGN);
+/**
+ * @param initialPgn 対局(PlayView)からの「振り返る」で渡される PGN。
+ *   指定時は URL ハッシュ・セッション・サンプルより優先してこの棋譜をロードする。
+ *   App は振り返りのたびに key を変えて ReviewView を再マウントするため、この prop は
+ *   マウント毎に固定値になる(=マウント時初期化ロジックだけで正しく反映される)。
+ * @param active このビューが現在表示中か(既定 true)。
+ *   WHY 必要か: App は「一度開いたら以降 unmount せず hidden で保持」する(対局中の状態を守るため)。
+ *   その結果、対局タブに戻っても ReviewView は生き続ける。可視判定なしだと、非表示中でも
+ *   document レベルの keydown(←/→/Home/End)を横取りして対局のキー操作やページスクロールを
+ *   潰してしまう(reviewer 指摘の回帰)。active=false のときはグローバルリスナーを張らない。
+ */
+export function ReviewView({
+  initialPgn,
+  active = true,
+}: { initialPgn?: string; active?: boolean } = {}) {
+  const [pgnText, setPgnText] = useState(initialPgn ?? SAMPLE_PGN);
   const [game, setGame] = useState<ChessGame | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
@@ -211,6 +225,14 @@ export function ReviewView() {
    *   loadPgn は直接 pgn 文字列を引数に取るため、状態更新と同時に呼べる。
    */
   useEffect(() => {
+    // 0. 対局からの振り返り(initialPgn)。最優先。
+    //    PlayView が指した対局をそのまま解析できるよう、他の復元より先に読む。
+    if (initialPgn) {
+      setPgnText(initialPgn);
+      loadPgn(initialPgn, { restoreCtx: true });
+      return;
+    }
+
     // 1. URL ハッシュ
     const hashMatch = window.location.hash.match(/[#&]g=([A-Za-z0-9\-_]*)/);
     if (hashMatch?.[1]) {
@@ -236,7 +258,7 @@ export function ReviewView() {
     // 3. サンプル自動ロード(初回訪問 → 空画面でなく対局が見える状態で出迎える)
     loadPgn(SAMPLE_PGN);
     // pgnText の初期値は SAMPLE_PGN なので setPgnText は不要
-  }, [loadPgn]); // loadPgn は安定([] deps)なので依存に含めても一回だけ実行
+  }, [loadPgn, initialPgn]); // loadPgn は安定。initialPgn はマウント毎固定(App が key で再マウント)
 
   // ── セッション永続化 ────────────────────────────────────────
   // loadedPgn・level・orientation・hintDismissed が変わるたびに保存。
@@ -372,7 +394,9 @@ export function ReviewView() {
    * game が変わるたびにリスナーを貼り直す(クロージャで game.length を参照)。
    */
   useEffect(() => {
-    if (!game) return;
+    // active=false(非表示=対局タブ表示中)ではリスナーを張らない。
+    // → 対局中に Home/End/矢印を裏の ReviewView が横取りする回帰を防ぐ。
+    if (!game || !active) return;
     const handler = (e: KeyboardEvent) => {
       // テキスト入力中は無視
       const target = e.target as HTMLElement;
@@ -401,7 +425,7 @@ export function ReviewView() {
 
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [game]);
+  }, [game, active]);
 
   // ── 各種計算 ─────────────────────────────────────────────────
 

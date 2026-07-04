@@ -1,3 +1,4 @@
+import { beforeEach, vi } from 'vitest';
 import {
   hashPgn,
   serializeContexts,
@@ -6,7 +7,14 @@ import {
   deserializeSession,
   encodePgnForUrl,
   decodePgnFromUrl,
+  serializePlayedGames,
+  deserializePlayedGames,
+  appendPlayedGame,
+  savePlayedGame,
+  loadPlayedGames,
+  deletePlayedGame,
   type SessionData,
+  type PlayedGame,
 } from './storage';
 import type { ExplanationContext } from './types';
 
@@ -202,5 +210,129 @@ describe('encodePgnForUrl / decodePgnFromUrl', () => {
     const longPgn = '[Event "Opera Game"]\n\n' + '1. e4 e5 '.repeat(30) + '*';
     const encoded = encodePgnForUrl(longPgn);
     expect(decodePgnFromUrl(encoded)).toBe(longPgn);
+  });
+});
+
+// ── 対局履歴(PlayedGame) ─────────────────────────────────────
+
+/** テスト用の PlayedGame を作る。id/createdAt を明示できるようにして順序検証を安定化。 */
+function makeGame(id: string, createdAt = 0): PlayedGame {
+  return {
+    id,
+    createdAt,
+    pgn: `[White "You"]\n\n1. e4 e5 *`,
+    result: '1-0',
+    outcome: 'win',
+    youColor: 'white',
+    opponent: 'AI (ふつう)',
+    moveCount: 2,
+  };
+}
+
+describe('serializePlayedGames / deserializePlayedGames', () => {
+  it('ラウンドトリップできる', () => {
+    const games = [makeGame('a', 1), makeGame('b', 2)];
+    const json = serializePlayedGames(games);
+    expect(deserializePlayedGames(json)).toEqual(games);
+  });
+
+  it('バージョン不一致は null', () => {
+    const json = JSON.stringify({ version: 999, games: [makeGame('a')] });
+    expect(deserializePlayedGames(json)).toBeNull();
+  });
+
+  it('games が配列でなければ null', () => {
+    expect(deserializePlayedGames(JSON.stringify({ version: 1, games: {} }))).toBeNull();
+  });
+
+  it('壊れた要素は除外され、正しい要素だけ残る', () => {
+    const json = JSON.stringify({
+      version: 1,
+      games: [makeGame('ok'), { id: 'broken' /* 必須欠落 */ }, { not: 'a game' }],
+    });
+    const result = deserializePlayedGames(json);
+    expect(result).toHaveLength(1);
+    expect(result?.[0].id).toBe('ok');
+  });
+
+  it('破損 JSON は null(例外を投げない)', () => {
+    expect(deserializePlayedGames('{{{')).toBeNull();
+  });
+});
+
+describe('appendPlayedGame', () => {
+  it('新しい対局が先頭に入る', () => {
+    const result = appendPlayedGame([makeGame('old')], makeGame('new'));
+    expect(result.map((g) => g.id)).toEqual(['new', 'old']);
+  });
+
+  it('上限(50件)を超えたら古いものから捨てる', () => {
+    // 既存50件 + 新規1件 → 51件になるが 50 に丸められ、最古が落ちる
+    const existing = Array.from({ length: 50 }, (_, i) => makeGame(`g${i}`, i));
+    const result = appendPlayedGame(existing, makeGame('newest', 100));
+    expect(result).toHaveLength(50);
+    expect(result[0].id).toBe('newest');
+    // appendPlayedGame は [new, ...existing].slice(0,50)。呼び出し側が「新しい順」を保つ前提なので
+    // 押し出されるのは末尾(=最古の位置) g49。先頭寄りの g0 は残る。
+    expect(result.some((g) => g.id === 'g49')).toBe(false);
+    expect(result.some((g) => g.id === 'g0')).toBe(true);
+  });
+});
+
+/*
+ * jsdom の既定オリジン(about:blank)では localStorage が使えないことがあるため、
+ * 副作用テスト専用に最小のインメモリ実装を差し込む。storage.ts は呼び出し時に
+ * グローバル localStorage を参照するので、stubGlobal で置換すれば実装は素通しで検証できる。
+ */
+class MemoryStorage {
+  private store = new Map<string, string>();
+  get length(): number {
+    return this.store.size;
+  }
+  clear(): void {
+    this.store.clear();
+  }
+  getItem(k: string): string | null {
+    return this.store.has(k) ? (this.store.get(k) as string) : null;
+  }
+  setItem(k: string, v: string): void {
+    this.store.set(k, String(v));
+  }
+  removeItem(k: string): void {
+    this.store.delete(k);
+  }
+  key(i: number): string | null {
+    return Array.from(this.store.keys())[i] ?? null;
+  }
+}
+
+describe('savePlayedGame / loadPlayedGames / deletePlayedGame (localStorage)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', new MemoryStorage());
+  });
+
+  it('保存した対局を読み戻せる', () => {
+    savePlayedGame(makeGame('x'));
+    const loaded = loadPlayedGames();
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0].id).toBe('x');
+  });
+
+  it('未保存時は空配列を返す', () => {
+    expect(loadPlayedGames()).toEqual([]);
+  });
+
+  it('複数保存すると新しい順に並ぶ', () => {
+    savePlayedGame(makeGame('first'));
+    savePlayedGame(makeGame('second'));
+    expect(loadPlayedGames().map((g) => g.id)).toEqual(['second', 'first']);
+  });
+
+  it('指定IDを削除できる', () => {
+    savePlayedGame(makeGame('keep'));
+    savePlayedGame(makeGame('drop'));
+    const after = deletePlayedGame('drop');
+    expect(after.map((g) => g.id)).toEqual(['keep']);
+    expect(loadPlayedGames().map((g) => g.id)).toEqual(['keep']);
   });
 });

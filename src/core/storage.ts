@@ -16,6 +16,7 @@
  *   "cj:" プレフィックスで他アプリとの衝突を避ける。
  *   "cj:ctx:<pgnHash>"  = 解析済みコンテキスト
  *   "cj:session"        = セッション(最終棋譜・レベル・向き・ヒント既読)
+ *   "cj:games"          = 対局履歴(AI戦で指した対局のリスト・新しい順)
  */
 
 import type { ExplanationContext } from './types';
@@ -28,6 +29,19 @@ const CONTEXTS_KEY_PREFIX = 'cj:ctx:';
 
 /** セッション保存キー。 */
 const SESSION_KEY = 'cj:session';
+
+/** 対局履歴の保存キー。 */
+const GAMES_KEY = 'cj:games';
+
+/**
+ * 対局履歴の保存上限(件数)。超過分は古いものから捨てる(リングバッファ的運用)。
+ *
+ * WHY 50 か: 1対局の PGN は 40手で ~250 文字。50件でも ~12KB 程度と localStorage(5MB)に
+ * 対して十分小さい。無制限にすると解析キャッシュ(cj:ctx:*)と競合して QuotaExceeded を
+ * 誘発しうるので、体験上「最近の対局が見れれば十分」という割り切りで上限を設ける。
+ * 上限を増やすときは他キー(解析キャッシュ)との合計容量に注意すること。
+ */
+const MAX_PLAYED_GAMES = 50;
 
 // ── 純関数(テスト対象) ───────────────────────────────────────
 
@@ -136,6 +150,96 @@ export function deserializeSession(json: string): SessionData | null {
   }
 }
 
+// ── 対局履歴(AI戦で指した対局) ─────────────────────────────────
+
+/**
+ * 保存する1対局分のメタ + 棋譜。
+ *
+ * WHY PGN をそのまま持つか:
+ *   PGN 1本あれば ChessGame.fromPgn で完全に再現でき、既存の ReviewView にそのまま渡して
+ *   「振り返り」に接続できる。独自の局面列を持つより PGN 一本化の方が資産(レビュー機能)を活かせる。
+ *
+ * outcome は「人間(あなた)視点」の勝敗:
+ *   result('1-0'等)は白視点の絶対表記。youColor と組み合わせて win/loss/draw を UI が出すのは
+ *   毎回の変換が面倒なので、保存時に人間視点の outcome を確定させておく(表示を単純化)。
+ */
+export interface PlayedGame {
+  /** 一意ID(呼び出し側で crypto.randomUUID 等で採番)。 */
+  id: string;
+  /** 作成時刻(epoch ms、呼び出し側で採番)。 */
+  createdAt: number;
+  /** ヘッダ付き PGN(振り返りにそのまま渡せる)。 */
+  pgn: string;
+  /** 絶対表記の結果: '1-0' | '0-1' | '1/2-1/2' | '*'。 */
+  result: string;
+  /** 人間(あなた)視点の結末。 */
+  outcome: 'win' | 'loss' | 'draw' | 'unfinished';
+  /** あなたが持っていた色。 */
+  youColor: 'white' | 'black';
+  /** 対戦相手の表示名(例 "AI (ふつう)")。 */
+  opponent: string;
+  /** 手数。 */
+  moveCount: number;
+}
+
+/** 対局履歴リストのペイロード型(バージョン付き)。 */
+interface PlayedGamesPayload {
+  version: number;
+  games: PlayedGame[];
+}
+
+/** PlayedGame らしさを検証する型ガード(壊れた要素を捨てるため)。 */
+function isPlayedGame(v: unknown): v is PlayedGame {
+  if (typeof v !== 'object' || v === null) return false;
+  const g = v as Record<string, unknown>;
+  return (
+    typeof g['id'] === 'string' &&
+    typeof g['createdAt'] === 'number' &&
+    typeof g['pgn'] === 'string' &&
+    typeof g['result'] === 'string' &&
+    (g['outcome'] === 'win' ||
+      g['outcome'] === 'loss' ||
+      g['outcome'] === 'draw' ||
+      g['outcome'] === 'unfinished') &&
+    (g['youColor'] === 'white' || g['youColor'] === 'black') &&
+    typeof g['opponent'] === 'string' &&
+    typeof g['moveCount'] === 'number'
+  );
+}
+
+/** 対局履歴リストを バージョン付き JSON にシリアライズする(純関数)。 */
+export function serializePlayedGames(games: PlayedGame[]): string {
+  const payload: PlayedGamesPayload = { version: SCHEMA_VERSION, games };
+  return JSON.stringify(payload);
+}
+
+/**
+ * JSON から対局履歴リストをデシリアライズする(純関数)。
+ * バージョン不一致・破損・非配列は null。個々の壊れた要素は型ガードで除外する。
+ */
+export function deserializePlayedGames(json: string): PlayedGame[] | null {
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const p = parsed as Partial<PlayedGamesPayload>;
+    if (p.version !== SCHEMA_VERSION) return null;
+    if (!Array.isArray(p.games)) return null;
+    return p.games.filter(isPlayedGame);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 新しい対局を先頭に足して上限で丸めたリストを返す(純関数)。
+ * WHY 純関数に切る: 「先頭追加 + 上限カット」の順序ロジックはバグりやすいので
+ * localStorage と切り離して vitest で固定する。
+ */
+export function appendPlayedGame(existing: PlayedGame[], game: PlayedGame): PlayedGame[] {
+  // 新しい順(先頭が最新)。上限を超えたら末尾(古いもの)から捨てる。
+  return [game, ...existing].slice(0, MAX_PLAYED_GAMES);
+}
+
 // ── 共有URL エンコード/デコード ──────────────────────────────────
 
 /**
@@ -234,4 +338,41 @@ export function loadSessionFromStorage(): SessionData | null {
   } catch {
     return null;
   }
+}
+
+/** localStorage から対局履歴(新しい順)を読み込む。無し・破損は空配列。 */
+export function loadPlayedGames(): PlayedGame[] {
+  try {
+    const json = localStorage.getItem(GAMES_KEY);
+    if (!json) return [];
+    return deserializePlayedGames(json) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 対局を履歴に保存し、更新後のリストを返す。
+ * 先頭追加 + 上限カット(appendPlayedGame)。書き込み失敗(QuotaExceeded 等)は握って
+ * 「計算上の新リスト」を返す(UI は即時反映でき、次回起動時に消えても事故にならない)。
+ */
+export function savePlayedGame(game: PlayedGame): PlayedGame[] {
+  const next = appendPlayedGame(loadPlayedGames(), game);
+  try {
+    localStorage.setItem(GAMES_KEY, serializePlayedGames(next));
+  } catch {
+    // QuotaExceeded / SecurityError → 無視(既存の履歴は壊さない)
+  }
+  return next;
+}
+
+/** 指定IDの対局を履歴から削除し、更新後のリストを返す。 */
+export function deletePlayedGame(id: string): PlayedGame[] {
+  const next = loadPlayedGames().filter((g) => g.id !== id);
+  try {
+    localStorage.setItem(GAMES_KEY, serializePlayedGames(next));
+  } catch {
+    // 書き込み失敗は無視
+  }
+  return next;
 }

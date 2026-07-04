@@ -65,5 +65,18 @@ export class MockEngine implements ChessEngine {
     };
   }
 
+  /**
+   * 対局用の着手。Skill Level(弱さ調整)は無視し、駒得ベストの手を返す(決定的)。
+   * WASM 不在の開発環境や jsdom テストで AI 戦フローを通すためのフォールバック。
+   *
+   * WHY PlayOptions を引数に取らないか:
+   *   モックは弱さ調整をしないので opts を使わない。使わない引数を書くと no-unused-vars に
+   *   引っかかるため、末尾 optional 引数を省略する(TS 的に interface へ代入可能=適合)。
+   */
+  async chooseMove(fen: string): Promise<string | null> {
+    const result = await this.analyze(fen, { multipv: 1 });
+    return result.bestMove;
+  }
+
   dispose(): void {}
 }

@@ -14,10 +14,10 @@
 
 | パス | 役割 |
 |---|---|
-| `src/core/` | ドメインロジック（フレームワーク非依存）。`game.ts`=PGN→棋譜モデル, `classify.ts`=手の質分類＋解説コンテキスト生成, `types.ts`=共通型, `uci.ts`は engine 配下 |
-| `src/engine/` | Stockfish(WASM) エンジン制御。`stockfish.ts`=Web Workerラッパ, `uci.ts`=UCIパーサ, `mock.ts`=テスト用モック, `factory.ts`=実装切替 |
+| `src/core/` | ドメインロジック（フレームワーク非依存）。`game.ts`=PGN→棋譜モデル(**不変・振り返り用**), `playGame.ts`=**対局用の可変ゲームコントローラ**(AI戦。着手/合法手dests/勝敗/成り/投了/待った/PGN生成・snapshot方式), `classify.ts`=手の質分類＋解説コンテキスト生成, `storage.ts`=localStorage永続化(セッション＋解析キャッシュ＋**対局履歴cj:games**), `types.ts`=共通型, `uci.ts`は engine 配下 |
+| `src/engine/` | Stockfish(WASM) エンジン制御。`stockfish.ts`=Web Workerラッパ(`analyze`=解析／`chooseMove`=対局着手・Skill Levelで弱さ制御・**直列化で単一worker混線を防止**), `uci.ts`=UCIパーサ, `mock.ts`=テスト用モック, `factory.ts`=実装切替 |
 | `src/explain/` | 解説クライアント。`client.ts`=Edge Function 呼び出し（未設定時ローカル簡易解説にフォールバック） |
-| `src/ui/` | React UI。`ReviewView.tsx`=振り返り画面の中心, `Board.tsx`=chessground盤, `MoveList.tsx`, `ExplanationPanel.tsx` |
+| `src/ui/` | React UI。`PlayView.tsx`=**対局画面(AI戦・履歴)**, `PlayBoard.tsx`=**操作可能な chessground 盤(合法手/王手/成りピッカー)**, `ReviewView.tsx`=振り返り画面の中心, `Board.tsx`=閲覧専用 chessground盤, `MoveList.tsx`, `ExplanationPanel.tsx`。**App.tsx で [対局\|レビュー] 切替(既定=対局)** |
 | `supabase/functions/explain/index.ts` | **LLMプロキシ Edge Function（Deno）**。コスト防衛の心臓部。APIキー秘匿・レート制限・キャッシュ・Turnstile・注入対策 |
 | `supabase/functions/_shared/validate.ts` | **入力検証/正規化の純ロジック**（Deno非依存）。Edge とフロント両方から使える信頼境界。vitestでテスト |
 | `supabase/migrations/` | DBスキーマ（RLSロック済みテーブル＋rate_check RPC）。版管理。本番へはMCPで適用済み |

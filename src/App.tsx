@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
 import { ReviewView } from './ui/ReviewView';
+import { PlayView } from './ui/PlayView';
 
 const FEEDBACK_URL = import.meta.env.VITE_FEEDBACK_URL as string | undefined;
 const KOFI_URL = import.meta.env.VITE_KOFI_URL as string | undefined;
+
+/** アプリのモード。対局(AI戦) / レビュー(棋譜振り返り)。 */
+type Mode = 'play' | 'review';
 
 /*
  * App — アプリシェル
@@ -14,19 +18,50 @@ const KOFI_URL = import.meta.env.VITE_KOFI_URL as string | undefined;
  *     WHY ドットだけにする: WASM マルチスレッドの可否はデプロイ設定の問題であり
  *     一般ユーザーには何も対処できない情報。DevTools 派向けに title 属性で残す。
  *   - Ko-fi リンク: rose ベタ塗りから藍ラインに変更(多色使い禁止ルール)。
+ *
+ * モード切替(Phase A: 対局優先):
+ *   既定は「対局」。ヘッダーのセグメントで「レビュー」に切り替えられる。
+ *   WHY 両ビューを unmount せず hidden で保持するか:
+ *     対局中にレビュータブへ切り替えても進行中の対局を失わないため、PlayView は常時マウント。
+ *     ReviewView はエンジン worker を余分に起動しないよう「初めてレビューを開くまで遅延マウント」し、
+ *     以降は hidden で状態保持する。
+ *   「この対局を振り返る」導線:
+ *     PlayView が終局 PGN を onReview で渡す → reviewKey を進めて ReviewView を再マウントし、
+ *     initialPgn として最優先ロードさせる(ReviewView 側の初期化優先順位 0 番)。
  */
 function App() {
   const [isolated, setIsolated] = useState<boolean | null>(null);
+  const [mode, setMode] = useState<Mode>('play');
+
+  // レビューへ渡す PGN と、振り返りのたびに ReviewView を再マウントするための key。
+  const [reviewPgn, setReviewPgn] = useState<string | undefined>(undefined);
+  const [reviewKey, setReviewKey] = useState(0);
+  // ReviewView を一度でもマウントしたか(遅延マウント + 以降 hidden 保持)。
+  const [reviewMounted, setReviewMounted] = useState(false);
 
   useEffect(() => {
     setIsolated(typeof window !== 'undefined' ? window.crossOriginIsolated : null);
   }, []);
 
+  // 対局からの「振り返る」: PGN を渡してレビューへ切り替え(再マウントで最優先ロード)。
+  const handleReview = (pgn: string) => {
+    setReviewPgn(pgn);
+    setReviewKey((k) => k + 1);
+    setReviewMounted(true);
+    setMode('review');
+  };
+
+  // タブ切替。レビューを開いたら以降マウント状態を保つ。
+  const switchMode = (m: Mode) => {
+    if (m === 'review') setReviewMounted(true);
+    setMode(m);
+  };
+
   return (
     <div className="flex min-h-full flex-col bg-surface text-on-surface">
       {/* ── ヘッダー ── */}
       <header className="border-b border-border px-5 py-3.5">
-        <div className="mx-auto flex max-w-6xl items-center justify-between">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
           {/* アプリタイトル — 藍色で品のある存在感を出す。
                WHY 子要素を使わず単一テキストノード: RTL の getByText はテキストが
                複数の子要素に分かれると h1.textContent が一致しても検出できない
@@ -38,6 +73,36 @@ function App() {
           </h1>
 
           <nav className="flex items-center gap-3">
+            {/* モード切替([対局 | レビュー])
+                WHY tablist でなく aria-pressed トグルか(reviewer 指摘):
+                  完全な ARIA tabs パターン(tabpanel/aria-controls/矢印キー/roving tabindex)を
+                  満たさないまま role="tab" を名乗ると SR の期待を裏切る。SetupScreen の色/難度
+                  選択と同じ「押下状態トグルボタン」に統一し、実装方針を揃える。
+                min-h-11: 自プロジェクトの 44px タップ領域規約に合わせる。 */}
+            <div aria-label="モード切替" className="flex rounded-lg border border-border p-0.5">
+              {(
+                [
+                  { m: 'play' as const, label: '対局' },
+                  { m: 'review' as const, label: 'レビュー' },
+                ] satisfies { m: Mode; label: string }[]
+              ).map(({ m, label }) => (
+                <button
+                  key={m}
+                  type="button"
+                  aria-pressed={mode === m}
+                  onClick={() => switchMode(m)}
+                  className={[
+                    'focus-ai min-h-11 rounded-md px-3 text-sm font-medium transition-colors',
+                    mode === m
+                      ? 'bg-ai text-white dark:bg-ai-dim'
+                      : 'text-muted hover:text-on-surface',
+                  ].join(' ')}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
             {FEEDBACK_URL && (
               <a
                 className="focus-ai rounded px-2 py-1 text-sm text-muted transition-colors hover:text-on-surface"
@@ -65,7 +130,18 @@ function App() {
       </header>
 
       <main className="flex-1">
-        <ReviewView />
+        {/* PlayView は常時マウント(対局中の状態をタブ切替で失わない)。 */}
+        <div className={mode === 'play' ? '' : 'hidden'}>
+          <PlayView onReview={handleReview} />
+        </div>
+
+        {/* ReviewView は初回レビューまで遅延マウント。以降 hidden で状態保持。
+            reviewKey を変えると再マウントされ initialPgn を最優先で読み込む。 */}
+        {reviewMounted && (
+          <div className={mode === 'review' ? '' : 'hidden'}>
+            <ReviewView key={reviewKey} initialPgn={reviewPgn} active={mode === 'review'} />
+          </div>
+        )}
       </main>
 
       {/* ── フッター ── */}
