@@ -1,5 +1,6 @@
 import type { ExplanationContext, KnowledgeProfile, MoveQuality } from '../core/types';
 import { qualityLabelJa } from '../core/classify';
+import { uciToSan, uciLineToSan } from '../core/notation';
 import { getTurnstileToken } from './turnstile';
 
 export type ExplainMode = 'explain' | 'followup';
@@ -21,9 +22,17 @@ export function isBackendConfigured(): boolean {
   return Boolean(SUPABASE_URL && SUPABASE_ANON);
 }
 
-/** 評価値(cp)を人間向けの短い表現にする。 */
+/*
+ * 詰み検出の閾値。classify.scoreToCp は詰みを ±(100000 - 手数) の巨大 cp に換算するため、
+ * この値以上は「ポーン差」でなく「詰み」として表現する(そのまま割ると "-1000.0ポーン" のような
+ * 意味不明な数値がユーザーに漏れる — 実際に起きた表示バグの再発防止)。
+ */
+const MATE_CP = 99_000;
+
+/** 評価値(cp, 手番側視点)を人間向けの短い表現にする。詰みは専用表現。 */
 function evalText(cp: number | undefined): string {
   if (cp === undefined) return '不明';
+  if (Math.abs(cp) >= MATE_CP) return cp > 0 ? '詰みあり(勝ち)' : '詰まされる(負け)';
   const pawns = (cp / 100).toFixed(1);
   const side = cp >= 0 ? '手番側有利' : '相手有利';
   return `${pawns}(${side})`;
@@ -38,10 +47,30 @@ export function localExplanation(req: ExplainRequest): string {
     )} です。詳しい対話解説にはAI解説バックエンドの設定が必要です。`;
   }
   const quality = c.quality ? qualityLabelJa(c.quality as MoveQuality) : '判定なし';
-  const best =
-    c.bestMove && c.movePlayed && c.bestMove !== c.movePlayed
-      ? `エンジンの最善手は ${c.bestMove} でした。`
-      : 'これはエンジン最善手と一致します。';
+
+  /*
+   * 最善手の提示は SAN + 想定手順 + 評価差で「最善手は何で、なぜ良かったか」に
+   * LLM 無しでも最低限答える(バックエンド未接続のユーザーにも core value を届ける)。
+   * SAN 変換に失敗したら UCI にフォールバックして情報は落とさない。
+   */
+  let best: string;
+  if (c.bestMove && c.movePlayed && c.bestMove !== c.movePlayed) {
+    const bestSan = uciToSan(c.fenOrSfen, c.bestMove) ?? c.bestMove;
+    const pvSan = c.pv ? uciLineToSan(c.fenOrSfen, c.pv, 6) : [];
+    const line = pvSan.length > 0 ? `想定手順は ${pvSan.join(' ')}。` : '';
+    // 評価差 = 最善(evalBefore)と実際(evalAfter)の差。ポーン換算で"なぜ悪いか"の数値的根拠。
+    // ただしどちらかが詰み級(±MATE_CP 以上)ならポーン換算は無意味なので専用文にする。
+    let delta = '';
+    if (c.evalBefore !== undefined && c.evalAfter !== undefined) {
+      const isMateSwing = Math.abs(c.evalBefore) >= MATE_CP || Math.abs(c.evalAfter) >= MATE_CP;
+      delta = isMateSwing
+        ? 'この手は詰みに直結する重大な分岐でした。'
+        : `この差は約 ${((c.evalBefore - c.evalAfter) / 100).toFixed(1)} ポーン相当です。`;
+    }
+    best = `エンジンの最善手は ${bestSan} でした。${line}${delta}`;
+  } else {
+    best = 'これはエンジン最善手と一致します。';
+  }
   return `この手は「${quality}」です。指す前の評価は ${evalText(
     c.evalBefore,
   )}、指した後は ${evalText(c.evalAfter)}。${best}（より自然な解説にはAI解説バックエンドの設定が必要です）`;

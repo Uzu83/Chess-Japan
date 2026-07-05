@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ExplanationContext } from '../core/types';
 import { qualityLabelJa } from '../core/classify';
+import { uciToSan, uciLineToSan } from '../core/notation';
 
 /*
  * ExplanationPanel — 解説・対話パネル
@@ -43,10 +44,13 @@ interface ExplanationPanelProps {
   onAsk: (question: string) => void;
 }
 
-/** センチポーン → 表示用文字列。+/-符号付き。 */
+/** センチポーン(手番側視点) → 表示用文字列。+/-符号付き。
+ *  WHY 詰みを「白詰み/黒詰み」と書かないか: この値は手番側視点であり、白視点ではない。
+ *  黒の手の評価で cp>0 は「黒に詰みあり」なので、色を断定すると逆になる(実際に誤表示だった)。
+ *  視点に依存しない「詰み(勝ち/負け)」で表現する。 */
 function evalLabel(cp?: number): string {
   if (cp === undefined) return '—';
-  if (Math.abs(cp) >= 99000) return cp > 0 ? '白詰み' : '黒詰み';
+  if (Math.abs(cp) >= 99000) return cp > 0 ? '詰み(勝ち)' : '詰み(負け)';
   const sign = cp > 0 ? '+' : '';
   return `${sign}${(cp / 100).toFixed(1)}`;
 }
@@ -56,7 +60,20 @@ function isError(text: string): boolean {
   return text.startsWith('解説の取得に失敗');
 }
 
-const QUICK_QUESTIONS = ['どういうこと？', 'もっと簡単に', 'なぜ最善手なの？'];
+/*
+ * クイック質問は関数化(WHY 静的配列をやめたか):
+ *   「なぜ最善手なの？」は指した手が最善のときにしか意味が通らない。
+ *   最善と違う手を指した場合は「なぜ <SAN> が最善なの？」と具体的な手名で聞けた方が、
+ *   LLM への質問としても曖昧さがなく、ユーザーの知りたいこと(最善手は何で、なぜ？)に直結する。
+ */
+function quickQuestions(playedIsBest: boolean, bestSan: string | null): string[] {
+  const whyBest = playedIsBest
+    ? 'なぜこれが最善手なの？'
+    : bestSan
+      ? `なぜ ${bestSan} が最善なの？`
+      : 'なぜ最善手なの？';
+  return ['どういうこと？', 'もっと簡単に', whyBest];
+}
 
 /* ── サブコンポーネント ─────────────────────────────────── */
 
@@ -140,6 +157,24 @@ export function ExplanationPanel({
   const hasExplanation = Boolean(explanation);
   const showError = hasExplanation && isError(explanation!);
 
+  /*
+   * ── 最善手の SAN 化と「なぜ良いか」素材 ──────────────────────
+   * WHY SAN で見せるか: エンジンの UCI("f6e4")は人間に読めない。SAN("Ne4")なら一目で分かる。
+   * fenOrSfen は「指す前の局面」なので、bestMove / pv をこの局面から適用すれば正しく変換できる。
+   * 変換失敗(不正PV等)は UCI にフォールバックし、情報を失わない。
+   *
+   * playedIsBest のとき PV ブロックは出さない(指した手が最善なら「代わりに何を指すべきだったか」
+   * という問い自体が成立しないため。ヘッダーの「最善: 一致」で十分)。
+   */
+  const bestSan = context.bestMove
+    ? (uciToSan(context.fenOrSfen, context.bestMove) ?? context.bestMove)
+    : null;
+  const playedIsBest =
+    !context.bestMove || !context.movePlayed || context.movePlayed === context.bestMove;
+  // 想定手順(最善に進んだ場合の読み筋)。表示は6手(3往復)まで — 筋の意図が伝わる最小量。
+  const pvSan =
+    !playedIsBest && context.pv ? uciLineToSan(context.fenOrSfen, context.pv, 6) : [];
+
   return (
     <div className="flex flex-col gap-3">
       {/* ── 評価メタ情報 ── */}
@@ -150,12 +185,37 @@ export function ExplanationPanel({
           {evalLabel(context.evalBefore)} → {evalLabel(context.evalAfter)}
         </span>
 
-        {context.bestMove && (
+        {bestSan && (
           <span className="text-xs text-subtle">
-            最善: <span className="font-mono">{context.bestMove}</span>
+            最善:{' '}
+            <span className="font-mono">{playedIsBest ? `${bestSan}（一致）` : bestSan}</span>
           </span>
         )}
       </div>
+
+      {/* ── 最善手ブロック(最善と違う手を指したときのみ) ──────────
+          「最善手は何で、なぜ良かったのか」に LLM 無しで確定的に答える中核 UI。
+          - 最善手 SAN + 指していれば保てた評価(evalBefore = 最善手の評価値)
+          - 想定手順(PV)を SAN で提示 → 「この筋に進むからこの評価」という"なぜ"の実体
+          さらに踏み込んだ言語化はクイック質問「なぜ <SAN> が最善なの？」で LLM に聞ける。 */}
+      {!playedIsBest && bestSan && (
+        <div className="rounded-lg border border-border bg-surface p-3">
+          <p className="text-xs text-on-surface">
+            最善は <span className="font-mono text-sm font-semibold text-ai">{bestSan}</span>{' '}
+            でした
+            {context.evalBefore !== undefined && (
+              <span className="text-muted">
+              （指せば評価 {evalLabel(context.evalBefore)} を保てた）
+              </span>
+            )}
+          </p>
+          {pvSan.length > 0 && (
+            <p className="mt-1.5 text-xs text-subtle">
+              想定手順: <span className="font-mono tracking-wide">{pvSan.join(' ')}</span>
+            </p>
+          )}
+        </div>
+      )}
 
       {/* ── 解説本文 / ローディング / アクションボタン ── */}
       {busy && !hasExplanation ? (
@@ -234,9 +294,9 @@ export function ExplanationPanel({
       {/* ── 追問 UI(解説取得後のみ表示) ── */}
       {hasExplanation && !showError && (
         <div className="flex flex-col gap-2 pt-1">
-          {/* クイック質問チップ */}
+          {/* クイック質問チップ(最善手が別にあるときは具体的な手名で聞ける) */}
           <div className="flex flex-wrap gap-1.5">
-            {QUICK_QUESTIONS.map((qq) => (
+            {quickQuestions(playedIsBest, bestSan).map((qq) => (
               <button
                 key={qq}
                 type="button"
