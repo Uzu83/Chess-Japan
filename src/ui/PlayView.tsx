@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { PlayGame, type PieceColor, type PlaySnapshot, type PromotionPiece } from '../core/playGame';
+import {
+  PlayGame,
+  opposite,
+  type PieceColor,
+  type PlaySnapshot,
+  type PromotionPiece,
+} from '../core/playGame';
+import { materialFromFen, lostPieces, type PieceLetter } from '../core/material';
 import { createEngine, type EngineKind } from '../engine/factory';
 import type { ChessEngine } from '../engine/types';
 import {
@@ -321,6 +328,19 @@ export function PlayView({ onReview }: PlayViewProps) {
   const isOver = snap?.outcome.over ?? false;
   const inGame = snap !== null;
 
+  /*
+   * マテリアル(駒得)表示用の派生値。
+   * WHY 毎レンダー再計算か: materialFromFen は FEN の文字数えだけで極めて軽く、
+   * メモ化(useMemo)の管理コストの方が高い。snap.fen が変わる=レンダーのタイミングと一致する。
+   * 「差」を見せるのが本質(ユーザー要望: 総得点でなく自分と相手の差)。
+   */
+  const material = snap ? materialFromFen(snap.fen) : null;
+  const youMat = material ? (youColor === 'white' ? material.white : material.black) : null;
+  const oppMat = material ? (youColor === 'white' ? material.black : material.white) : null;
+  const oppColor = opposite(youColor);
+  // AI 名は activeDifficultyRef から読む(startGame で snap 更新前に確定しているため描画時は常に最新)
+  const opponentName = `AI (${activeDifficultyRef.current.label})`;
+
   // 盤を操作できるのは「自分の手番・思考中でない・続行中」のときだけ
   const movableColor: PieceColor | undefined =
     snap && !isOver && !aiThinking && snap.turn === youColor ? youColor : undefined;
@@ -361,9 +381,20 @@ export function PlayView({ onReview }: PlayViewProps) {
       ) : (
         // ═══ 対局画面 ═══
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-          {/* 盤 */}
+          {/* 盤 + プレイヤープレート(上=相手 / 下=あなた)
+              プレートには lichess 流の「取った駒の列 + マテリアル点差(+N)」を表示。
+              点差はリードしている側にだけ +N を出す(0 や負は出さない=差だけが意味を持つ)。 */}
           <section className="flex flex-col gap-4">
             <div className="mx-auto w-full max-w-[500px]">
+              {youMat && oppMat && (
+                <PlayerPlate
+                  name={opponentName}
+                  captured={lostPieces(youMat.counts)} // 相手が取った駒 = あなたが失った駒
+                  capturedColor={youColor} // あなたの駒なのであなたの色のグリフ
+                  diff={oppMat.points - youMat.points}
+                  active={!isOver && snap.turn !== youColor}
+                />
+              )}
               <PlayBoard
                 fen={snap.fen}
                 orientation={orientation}
@@ -375,6 +406,15 @@ export function PlayView({ onReview }: PlayViewProps) {
                 isPromotion={isPromotion}
                 onUserMove={handleUserMove}
               />
+              {youMat && oppMat && (
+                <PlayerPlate
+                  name="あなた"
+                  captured={lostPieces(oppMat.counts)} // あなたが取った駒 = 相手が失った駒
+                  capturedColor={oppColor}
+                  diff={youMat.points - oppMat.points}
+                  active={!isOver && snap.turn === youColor}
+                />
+              )}
             </div>
 
             {/* 手番/状態インジケータ */}
@@ -579,6 +619,69 @@ function SetupScreen({
           onDelete={onDeleteHistory}
         />
       </aside>
+    </div>
+  );
+}
+
+/** 取った駒のグリフ(色別)。相手から取った駒はその駒の色で見せる。 */
+const CAPTURED_GLYPHS: Record<PieceColor, Record<PieceLetter, string>> = {
+  white: { p: '♙', n: '♘', b: '♗', r: '♖', q: '♕' },
+  black: { p: '♟', n: '♞', b: '♝', r: '♜', q: '♛' },
+};
+
+/**
+ * プレイヤープレート — 名前 + 取った駒の列 + マテリアル点差。
+ *
+ * 表示ルール(lichess/chess.com 慣行に合わせる):
+ *   - 取った駒は価値の低い順(p→n→b→r→q)に並べる(視線が自然に流れる)
+ *   - 点差 +N はリードしている側にだけ表示(0/劣勢は非表示 — “差”だけが情報)
+ *   - active(手番側)は名前を強調して「どちらが考える番か」を示す
+ */
+function PlayerPlate({
+  name,
+  captured,
+  capturedColor,
+  diff,
+  active,
+}: {
+  name: string;
+  /** この側が取った駒の数(相手の失った駒)。 */
+  captured: Record<PieceLetter, number>;
+  /** 取った駒のグリフ色(=相手の色)。 */
+  capturedColor: PieceColor;
+  /** この側から見た点差。> 0 のときだけ +N を表示。 */
+  diff: number;
+  /** 手番側なら true(名前を強調)。 */
+  active: boolean;
+}) {
+  const order: PieceLetter[] = ['p', 'n', 'b', 'r', 'q'];
+  const glyphs = order
+    .flatMap((k) => Array<string>(captured[k]).fill(CAPTURED_GLYPHS[capturedColor][k]))
+    .join('');
+
+  return (
+    <div className="flex min-h-7 items-center gap-2 px-1 py-0.5">
+      <span
+        className={[
+          'text-sm',
+          active ? 'font-semibold text-on-surface' : 'text-muted',
+        ].join(' ')}
+      >
+        {name}
+      </span>
+      {glyphs && (
+        <span aria-label="取った駒" className="text-base leading-none text-muted">
+          {glyphs}
+        </span>
+      )}
+      {diff > 0 && (
+        <span
+          aria-label={`マテリアル ${diff} ポイントリード`}
+          className="text-xs font-bold tabular-nums text-ai"
+        >
+          +{diff}
+        </span>
+      )}
     </div>
   );
 }
