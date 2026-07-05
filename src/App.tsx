@@ -58,7 +58,9 @@ function App() {
   };
 
   return (
-    <div className="flex min-h-full flex-col bg-surface text-on-surface">
+    // min-h-dvh: 動的ビューポート高で「最低でも画面いっぱい・コンテンツが長ければ伸びる」。
+    // min-h-full(親の%依存)はモバイルで下端スクロール切れの原因になるため dvh に変更。
+    <div className="flex min-h-dvh flex-col bg-surface text-on-surface">
       {/* ── ヘッダー ── */}
       <header className="border-b border-border px-5 py-3.5">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
