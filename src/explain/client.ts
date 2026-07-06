@@ -14,12 +14,24 @@ export interface ExplainRequest {
   profile?: KnowledgeProfile;
 }
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+/*
+ * WHY モジュール定数でなく関数で env を読むか(テスト決定性・実バグの再発防止):
+ *   モジュールトップの const に import.meta.env を捕獲すると、その値は import 時に固定され、
+ *   テストの vi.stubEnv が効かない。さらに Vitest は Vite 経由で開発者の .env.local も読むため、
+ *   「バックエンド未設定」を前提にしたテストが .env.local を作った瞬間に落ちる
+ *   (実際に VITE_SUPABASE_URL を .env.local に置いたら CI ではなくローカルだけ落ちた)。
+ *   呼び出し時に読む形なら、テストが stubEnv で環境を明示制御でき、開発者の env に依存しない。
+ */
+function supabaseUrl(): string | undefined {
+  return import.meta.env.VITE_SUPABASE_URL as string | undefined;
+}
+function supabaseAnon(): string | undefined {
+  return import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+}
 
 /** バックエンド(Edge Function)が設定済みか。 */
 export function isBackendConfigured(): boolean {
-  return Boolean(SUPABASE_URL && SUPABASE_ANON);
+  return Boolean(supabaseUrl() && supabaseAnon());
 }
 
 /*
@@ -83,13 +95,13 @@ export async function requestExplanation(req: ExplainRequest): Promise<string> {
   }
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${SUPABASE_ANON}`,
+    Authorization: `Bearer ${supabaseAnon()}`,
   };
   // Turnstile 有効時のみ、リクエスト毎の新鮮なトークンを x-turnstile-token に付与（#2）。
   // 未設定なら null で無付与（バックエンドも非課金環境では検証 skip）。単発トークンなので都度取得。
   const turnstileToken = await getTurnstileToken();
   if (turnstileToken) headers['x-turnstile-token'] = turnstileToken;
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/explain`, {
+  const res = await fetch(`${supabaseUrl()}/functions/v1/explain`, {
     method: 'POST',
     headers,
     body: JSON.stringify(req),

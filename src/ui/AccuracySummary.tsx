@@ -81,7 +81,7 @@ export function AccuracySummary({ summary, totalMoves }: AccuracySummaryProps) {
   return (
     <section
       aria-label="精度サマリ"
-      className="rounded-xl border border-border bg-surface-2 px-3 py-2.5"
+      className="rounded-xl border border-border bg-surface-2 px-3 py-2.5 shadow-card"
     >
       <div className="mb-1.5 flex items-center justify-between">
         <h3 className="text-xs font-semibold text-on-surface">精度サマリ</h3>

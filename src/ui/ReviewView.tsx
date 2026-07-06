@@ -707,7 +707,7 @@ export function ReviewView({
               解析済みデータが増えるにつれてリアルタイムで更新される。
               クリックでその手へジャンプ。 */}
           {game && (
-            <div className="mx-auto w-full max-w-[500px] rounded-lg border border-border bg-surface-2 p-2">
+            <div className="mx-auto w-full max-w-[500px] rounded-lg border border-border bg-surface-2 p-2 shadow-card">
               <EvalGraph
                 moves={game.moves}
                 contexts={contexts}
@@ -721,7 +721,10 @@ export function ReviewView({
         {/* ── サイドパネル: PGN読み込み + 解析 + 手順表 + 解説 ── */}
         <aside className="flex flex-col gap-4">
           {/* PGN 読み込みセクション */}
-          <details open className="group rounded-xl border border-border bg-surface-2 p-4">
+          <details
+            open
+            className="group rounded-xl border border-border bg-surface-2 p-4 shadow-card"
+          >
             <summary className="focus-ai -m-1 cursor-pointer rounded p-1 text-sm font-semibold text-on-surface">
               棋譜を読み込む（PGN）
             </summary>
@@ -822,7 +825,7 @@ export function ReviewView({
 
           {/* 全手解析セクション(ゲーム読み込み後のみ表示) */}
           {game && (
-            <div className="rounded-xl border border-border bg-surface-2 p-4">
+            <div className="rounded-xl border border-border bg-surface-2 p-4 shadow-card">
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <h2 className="text-sm font-semibold text-on-surface">全手解析</h2>
@@ -907,7 +910,7 @@ export function ReviewView({
           )}
 
           {/* 解説パネル */}
-          <div className="rounded-xl border border-border bg-surface-2 p-4">
+          <div className="rounded-xl border border-border bg-surface-2 p-4 shadow-card">
             <h2 className="mb-3 text-sm font-semibold text-on-surface">解説・対話</h2>
             <ExplanationPanel
               context={currentContext}
@@ -948,7 +951,7 @@ function NavButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={ariaLabel}
-      className="focus-ai min-h-11 min-w-11 rounded-lg border border-border px-3 text-sm text-on-surface transition-colors hover:bg-surface-2 disabled:opacity-30"
+      className="focus-ai min-h-11 min-w-11 rounded-lg border border-border px-3 text-sm text-on-surface shadow-card transition-colors hover:bg-surface-2 hover:shadow-none disabled:opacity-30 disabled:shadow-none"
     >
       {label}
     </button>

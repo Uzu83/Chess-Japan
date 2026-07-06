@@ -172,8 +172,7 @@ export function ExplanationPanel({
   const playedIsBest =
     !context.bestMove || !context.movePlayed || context.movePlayed === context.bestMove;
   // 想定手順(最善に進んだ場合の読み筋)。表示は6手(3往復)まで — 筋の意図が伝わる最小量。
-  const pvSan =
-    !playedIsBest && context.pv ? uciLineToSan(context.fenOrSfen, context.pv, 6) : [];
+  const pvSan = !playedIsBest && context.pv ? uciLineToSan(context.fenOrSfen, context.pv, 6) : [];
 
   return (
     <div className="flex flex-col gap-3">
@@ -187,8 +186,7 @@ export function ExplanationPanel({
 
         {bestSan && (
           <span className="text-xs text-subtle">
-            最善:{' '}
-            <span className="font-mono">{playedIsBest ? `${bestSan}（一致）` : bestSan}</span>
+            最善: <span className="font-mono">{playedIsBest ? `${bestSan}（一致）` : bestSan}</span>
           </span>
         )}
       </div>
@@ -197,15 +195,20 @@ export function ExplanationPanel({
           「最善手は何で、なぜ良かったのか」に LLM 無しで確定的に答える中核 UI。
           - 最善手 SAN + 指していれば保てた評価(evalBefore = 最善手の評価値)
           - 想定手順(PV)を SAN で提示 → 「この筋に進むからこの評価」という"なぜ"の実体
-          さらに踏み込んだ言語化はクイック質問「なぜ <SAN> が最善なの？」で LLM に聞ける。 */}
+          さらに踏み込んだ言語化はクイック質問「なぜ <SAN> が最善なの？」で LLM に聞ける。
+
+          デザイン改善:
+            border-l-[3px] border-l-ai の左アクセントボーダー + bg-ai-bg で「注目ブロック」感。
+            元の border border-border bg-surface は平坦で見落としやすかった。
+            WHY 左アクセントか: ニュースサイト・ドキュメントで「重要な引用・補足」に広く使われる
+            視覚的慣習。囲み全体を藍色にせず左線だけにすることで主張を抑えてテキストが主役のまま。 */}
       {!playedIsBest && bestSan && (
-        <div className="rounded-lg border border-border bg-surface p-3">
+        <div className="rounded-r-lg border-l-[3px] border-l-ai bg-ai-bg px-4 py-3 dark:bg-ai-deep">
           <p className="text-xs text-on-surface">
-            最善は <span className="font-mono text-sm font-semibold text-ai">{bestSan}</span>{' '}
-            でした
+            最善は <span className="font-mono text-sm font-semibold text-ai">{bestSan}</span> でした
             {context.evalBefore !== undefined && (
               <span className="text-muted">
-              （指せば評価 {evalLabel(context.evalBefore)} を保てた）
+                （指せば評価 {evalLabel(context.evalBefore)} を保てた）
               </span>
             )}
           </p>

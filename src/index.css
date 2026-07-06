@@ -51,6 +51,17 @@
   --color-ai-muted: #8aaad4; /* ダーク時テキスト・サブアクセント */
   --color-ai-deep: #192540; /* ダーク時差し色サーフェス */
 
+  /* ── 影トークン ──
+     カードの浮遊感・ボタンの立体感を出す。ライト/ダーク共通で極めて控えめな値を選んだ。
+     WHY この透明度か:
+       card: 6%/4% — 和紙の温かみに馴染む最小限の奥行き。強くすると「事務的なドロップシャドウ」になる。
+       btn:  14%   — 藍ボタンの上でも自然に感じる立体感。押せる感を出す最小値。
+       card-hover: 9%/5% — card の1.5倍。ホバー時に「1段浮いた」と感じさせる増幅量。
+     Tailwind v4 では --shadow-* を @theme に置くと shadow-* ユーティリティが自動生成される。   */
+  --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.04);
+  --shadow-btn: 0 1px 4px 0 rgb(0 0 0 / 0.14);
+  --shadow-card-hover: 0 4px 12px 0 rgb(0 0 0 / 0.09), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+
   /* ── セマンティックエイリアス ──
      @layer base の dark 上書きで自動切替。
      bg-surface / text-on-surface / border-border / text-muted / text-subtle で使う。 */

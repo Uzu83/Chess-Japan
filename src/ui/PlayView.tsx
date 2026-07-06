@@ -68,6 +68,19 @@ const DIFFICULTIES: Difficulty[] = [
   { key: 'max', label: '最強', skill: 20, movetimeMs: 1500, desc: 'エンジン全力' },
 ];
 
+/*
+ * 難易度カードの装飾グリフ。
+ * チェス駒の強さで難度を直感的に表現する(ポーン→ナイト→ルーク→クイーン)。
+ * WHY Unicode チェス記号か: 外部フォント不要、単色のため多色制限に抵触しない、
+ * COEP 制約にも影響しない。aria-hidden で SR への余分な読み上げをなくす。
+ */
+const DIFFICULTY_ICONS: Record<string, string> = {
+  easy: '♙', // ポーン   — 最も弱い駒 → 入門
+  normal: '♘', // ナイト  — 個性的な動き → 初〜中級
+  hard: '♖', // ルーク  — 直線制圧力 → 中〜上級
+  max: '♛', // クイーン — 最強の駒  → エンジン全力
+};
+
 /** あなたが持つ色の選択肢(random はゲーム開始時に確定)。 */
 type ColorChoice = 'white' | 'black' | 'random';
 
@@ -473,7 +486,7 @@ export function PlayView({ onReview }: PlayViewProps) {
 
             {/* 対局中の操作 */}
             {!isOver && (
-              <div className="flex flex-wrap gap-2 rounded-xl border border-border bg-surface-2 p-3">
+              <div className="flex flex-wrap gap-2 rounded-xl border border-border bg-surface-2 p-3 shadow-card">
                 <button
                   type="button"
                   onClick={handleTakeback}
@@ -544,10 +557,24 @@ function SetupScreen({
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-      {/* 設定パネル */}
-      <section className="flex flex-col gap-5 rounded-2xl border border-border bg-surface-2 p-5">
-        <div>
-          <h2 className="text-base font-semibold text-on-surface">AI と対局</h2>
+      {/* 設定パネル
+          shadow-card でカードに浮遊感。
+          ヒーローヘッダー: 大きな駒グリフを背景に薄く敷き、ゲーム開始のワクワク感を演出。 */}
+      <section className="flex flex-col gap-5 rounded-2xl border border-border bg-surface-2 p-5 shadow-card">
+        {/* 見出しエリア — relative で装飾グリフの基点になる */}
+        <div className="relative">
+          {/* 背景装飾: 超薄の藍色ポーンが和紙に溶け込む。
+              pointer-events-none / select-none でインタラクションを遮らない。
+              opacity-[0.07] = 7%。これ以上濃くすると主役（テキスト）を喰う。 */}
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute -right-1 -top-2 select-none text-7xl leading-none text-ai opacity-[0.07]"
+          >
+            ♟
+          </span>
+          {/* text-lg font-bold: 「対局開始」という行為の重みに合った見出し。
+              元の text-base font-semibold より一段上げることで「入口」感を出す。 */}
+          <h2 className="text-lg font-bold text-on-surface">AI と対局</h2>
           <p className="mt-1 text-xs text-muted">
             ローカルの Stockfish と対局します。指した対局はこの端末に履歴として保存され、
             あとから1手ずつ振り返れます。
@@ -565,9 +592,13 @@ function SetupScreen({
                 onClick={() => onColorChange(opt.value)}
                 aria-pressed={colorChoice === opt.value}
                 className={[
-                  'focus-ai min-h-11 rounded-lg border px-4 text-sm font-medium transition-colors',
+                  'focus-ai min-h-11 rounded-lg border px-4 text-sm font-medium',
+                  /* motion-safe: で reduced-motion ユーザーにはトランジション無効。
+                     transition-all で色・影・変形を一括処理。                       */
+                  'motion-safe:transition-all motion-safe:duration-150',
                   colorChoice === opt.value
-                    ? 'border-ai bg-ai text-white dark:bg-ai-dim'
+                    ? /* 選択中: shadow-btn で「押し込んだ感」を出す */
+                      'border-ai bg-ai text-white shadow-btn dark:bg-ai-dim'
                     : 'border-border text-muted hover:border-ai hover:text-ai',
                 ].join(' ')}
               >
@@ -588,12 +619,23 @@ function SetupScreen({
                 onClick={() => onDifficultyChange(d)}
                 aria-pressed={difficulty.key === d.key}
                 className={[
-                  'focus-ai flex min-h-16 flex-col items-center justify-center rounded-lg border px-2 py-2 text-center transition-colors',
+                  /* rounded-xl: 元の rounded-lg より角丸を大きくしてカード感を強化 */
+                  'focus-ai flex min-h-16 flex-col items-center justify-center gap-0.5 rounded-xl border px-2 py-2 text-center',
+                  /* ホバー・選択の変形と影は motion-safe の下にのみ適用。
+                     reduced-motion ユーザーには色変化のみ(transition-colors を motion-safe 外に置かない
+                     理由: motion-safe: 内に transition-all で統一した方が明示的)。 */
+                  'motion-safe:transition-all motion-safe:duration-150',
                   difficulty.key === d.key
-                    ? 'border-ai bg-ai-bg text-ai dark:bg-ai-deep dark:text-ai-muted'
-                    : 'border-border text-muted hover:border-ai',
+                    ? /* 選択中: 藍サーフェス + shadow-card で「浮き上がった」感 */
+                      'border-ai bg-ai-bg text-ai shadow-card dark:bg-ai-deep dark:text-ai-muted'
+                    : /* 非選択: ホバー時に1px浮かせて「押せる」感を示す */
+                      'border-border text-muted hover:border-ai hover:shadow-card motion-safe:hover:-translate-y-px',
                 ].join(' ')}
               >
+                {/* 駒グリフ: ラベルの上に置いて難度を視覚的に先に伝える。aria-hidden で SR は読まない。 */}
+                <span aria-hidden="true" className="text-base leading-none opacity-60">
+                  {DIFFICULTY_ICONS[d.key] ?? '♟'}
+                </span>
                 <span className="text-sm font-semibold">{d.label}</span>
                 <span className="mt-0.5 text-[10px] opacity-80">{d.desc}</span>
               </button>
@@ -601,11 +643,17 @@ function SetupScreen({
           </div>
         </div>
 
+        {/*
+         * 対局開始ボタン — プライマリCTAとして最も目を引く要素。
+         * shadow-btn: 押せる立体感。hover時に shadow-card-hover へ増幅して「浮き上がり」演出。
+         * motion-safe: でホバー translate を reduced-motion ユーザーへ適用しない。
+         * disabled: shadow を無効化して「押せない」状態を視覚的に正直に伝える。
+         */}
         <button
           type="button"
           onClick={onStart}
           disabled={engineLoading}
-          className="focus-ai min-h-12 rounded-xl bg-ai px-6 text-base font-semibold text-white transition-colors hover:bg-ai-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-ai-dim dark:hover:bg-ai"
+          className="focus-ai min-h-12 rounded-xl bg-ai px-6 text-base font-semibold text-white shadow-btn hover:bg-ai-hover motion-safe:transition-all motion-safe:hover:-translate-y-0.5 motion-safe:hover:shadow-card-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none dark:bg-ai-dim dark:hover:bg-ai"
         >
           {engineLoading ? 'エンジン読み込み中…' : '対局開始'}
         </button>
@@ -613,11 +661,7 @@ function SetupScreen({
 
       {/* 履歴一覧 */}
       <aside>
-        <GameHistory
-          history={history}
-          onReview={onReviewHistory}
-          onDelete={onDeleteHistory}
-        />
+        <GameHistory history={history} onReview={onReviewHistory} onDelete={onDeleteHistory} />
       </aside>
     </div>
   );
@@ -661,11 +705,19 @@ function PlayerPlate({
 
   return (
     <div className="flex min-h-7 items-center gap-2 px-1 py-0.5">
+      {/*
+       * アクティブ手番インジケーター — 手番側のプレイヤー名の前に小さな藍ドットを表示。
+       * animate-pulse で「今まさに考える番」を視覚的に伝える(reduced-motion の下で自動停止)。
+       * aria-hidden: 手番情報は TurnIndicator の aria-live で伝えているため重複させない。
+       */}
+      {active && (
+        <span
+          aria-hidden="true"
+          className="block h-1.5 w-1.5 shrink-0 rounded-full bg-ai motion-safe:animate-pulse"
+        />
+      )}
       <span
-        className={[
-          'text-sm',
-          active ? 'font-semibold text-on-surface' : 'text-muted',
-        ].join(' ')}
+        className={['text-sm', active ? 'font-semibold text-on-surface' : 'text-muted'].join(' ')}
       >
         {name}
       </span>
@@ -706,12 +758,16 @@ function TurnIndicator({
 
   return (
     <div className="flex items-center gap-2 text-sm text-on-surface">
-      {/* あなたの色の小さな駒アイコン */}
+      {/* あなたの色の駒ドット。
+          bg-white / bg-black は「プレイヤープレートの駒色ドット」専用の生色例外(CLAUDE.md 記載)。
+          AI 思考中かつ続行中のとき motion-safe:animate-pulse で「処理中」を視覚的に示す。
+          aria-hidden: 状態は下の aria-live で伝えるため重複させない。 */}
       <span
         aria-hidden="true"
         className={[
           'inline-block h-3 w-3 rounded-full border',
           youColor === 'white' ? 'border-border bg-white' : 'border-border bg-black',
+          aiThinking && !isOver ? 'motion-safe:animate-pulse' : '',
         ].join(' ')}
       />
       <span aria-live="polite">{text}</span>
@@ -744,9 +800,20 @@ function ResultBanner({
 
   return (
     // role="status" で終局と勝敗をスクリーンリーダーに読み上げる(TurnIndicator は「対局終了」しか伝えないため)。
-    <div className={`rounded-xl border p-4 ${tone}`} role="status">
-      <p className="text-lg font-bold text-on-surface">{title}</p>
-      <p className="mt-0.5 text-xs text-muted">{REASON_LABEL[outcome.reason] ?? '終局'}</p>
+    // shadow-card: 終局バナーは重要な情報なので他カードより一段「浮いた」感を出す。
+    <div className={`rounded-xl border p-4 shadow-card ${tone}`} role="status">
+      {/* 勝敗を象徴する駒グリフ + 結果タイトルを横並び。
+          WHY チェス記号か: 絵文字(🏆等)は色を持ちデザイン方針「差し色は藍のみ」に抵触する。
+          Unicode チェス記号は単色で環境依存が少ない。
+          ♛(クイーン) = 勝利、♙(ポーン) = 引き分け(互角の象徴)、♟(黒ポーン) = 敗北。
+          aria-hidden: タイトルテキスト(title)で意味は伝わるため重複させない。 */}
+      <div className="mb-1 flex items-center gap-2">
+        <span aria-hidden="true" className="select-none text-xl leading-none">
+          {draw ? '♙' : youWon ? '♛' : '♟'}
+        </span>
+        <p className="text-lg font-bold text-on-surface">{title}</p>
+      </div>
+      <p className="text-xs text-muted">{REASON_LABEL[outcome.reason] ?? '終局'}</p>
       <div className="mt-3 flex flex-col gap-2">
         <button
           type="button"
@@ -793,7 +860,7 @@ function PlayMoveList({ moves }: { moves: PlaySnapshot['history'] }) {
   }
 
   return (
-    <div className="rounded-xl border border-border bg-surface-2 p-3">
+    <div className="rounded-xl border border-border bg-surface-2 p-3 shadow-card">
       <h3 className="mb-2 text-xs font-semibold text-muted">棋譜</h3>
       {moves.length === 0 ? (
         <p className="text-xs text-subtle">まだ手がありません</p>
@@ -837,7 +904,7 @@ function GameHistory({
   };
 
   return (
-    <div className="rounded-2xl border border-border bg-surface-2 p-4">
+    <div className="rounded-2xl border border-border bg-surface-2 p-4 shadow-card">
       <h2 className="text-sm font-semibold text-on-surface">対局履歴</h2>
       {history.length === 0 ? (
         <p className="mt-2 text-xs text-subtle">
@@ -850,7 +917,7 @@ function GameHistory({
             return (
               <li
                 key={g.id}
-                className="flex items-center gap-2 rounded-lg border border-border bg-surface p-2.5"
+                className="flex items-center gap-2 rounded-lg border border-border bg-surface p-2.5 shadow-card"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">

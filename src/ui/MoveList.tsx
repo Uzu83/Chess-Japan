@@ -141,12 +141,13 @@ export function MoveList({ moves, currentIndex, qualities, onSelect, contexts }:
   };
 
   return (
-    /* max-h で溢れたらスクロール。lg でさらに深く。 */
+    /* max-h で溢れたらスクロール。lg でさらに深く。
+       bg-surface-2 + shadow-card: 他のサイドパネルカードと高さを揃えた質感。 */
     <div
       ref={listRef}
       role="list"
       aria-label="棋譜手順"
-      className="max-h-64 overflow-auto rounded-xl border border-border lg:max-h-[440px]"
+      className="max-h-64 overflow-auto rounded-xl border border-border bg-surface-2 shadow-card lg:max-h-[440px]"
     >
       <table className="w-full border-collapse text-sm">
         <tbody>

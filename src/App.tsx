@@ -62,17 +62,25 @@ function App() {
     // min-h-full(親の%依存)はモバイルで下端スクロール切れの原因になるため dvh に変更。
     <div className="flex min-h-dvh flex-col bg-surface text-on-surface">
       {/* ── ヘッダー ── */}
-      <header className="border-b border-border px-5 py-3.5">
+      {/*
+       * shadow-card を加えてヘッダーにわずかな浮き感を与える。
+       * bg-surface を明示: shadow が透過背景で破綻しないよう自身の背景を確定させる。
+       */}
+      <header className="border-b border-border bg-surface px-5 py-3.5 shadow-card">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
-          {/* アプリタイトル — 藍色で品のある存在感を出す。
-               WHY 子要素を使わず単一テキストノード: RTL の getByText はテキストが
-               複数の子要素に分かれると h1.textContent が一致しても検出できない
-               (実際に確認済み)。App.test.tsx のアサーション変更は CLAUDE.md で NG
-               のため、単一テキストノードで h1 の textContent を "Chess-Japan — 1手解説AI"
-               のまま保つ設計を採用した。                                          */}
-          <h1 className="text-base font-semibold tracking-wide text-ai sm:text-lg">
-            Chess-Japan — 1手解説AI
-          </h1>
+          {/* アプリタイトルエリア
+               WHY h1 は単一テキストノードのまま: getByText('Chess-Japan — 1手解説AI')
+               が h1 の textContent に一致する必要があるため、子要素で分割しない設計を維持
+               (実際に確認済み。App.test.tsx のアサーション変更は CLAUDE.md で NG)。
+               ♟ グリフは h1 の兄弟 span として配置 → h1.textContent は変わらない。 */}
+          <div className="flex items-center gap-2">
+            <span aria-hidden="true" className="select-none text-xl text-ai opacity-60">
+              ♟
+            </span>
+            <h1 className="text-base font-semibold tracking-wide text-ai sm:text-lg">
+              Chess-Japan — 1手解説AI
+            </h1>
+          </div>
 
           <nav className="flex items-center gap-3">
             {/* モード切替([対局 | レビュー])
@@ -80,8 +88,13 @@ function App() {
                   完全な ARIA tabs パターン(tabpanel/aria-controls/矢印キー/roving tabindex)を
                   満たさないまま role="tab" を名乗ると SR の期待を裏切る。SetupScreen の色/難度
                   選択と同じ「押下状態トグルボタン」に統一し、実装方針を揃える。
-                min-h-11: 自プロジェクトの 44px タップ領域規約に合わせる。 */}
-            <div aria-label="モード切替" className="flex rounded-lg border border-border p-0.5">
+                min-h-11: 自プロジェクトの 44px タップ領域規約に合わせる。
+                デザイン改善: rounded-xl + bg-surface + shadow-card でセグメントコントロール的な
+                質感。選択タブは shadow-btn でわずかに浮いて「押されている感」を強調。 */}
+            <div
+              aria-label="モード切替"
+              className="flex rounded-xl border border-border bg-surface p-0.5 shadow-card"
+            >
               {(
                 [
                   { m: 'play' as const, label: '対局' },
@@ -94,9 +107,10 @@ function App() {
                   aria-pressed={mode === m}
                   onClick={() => switchMode(m)}
                   className={[
-                    'focus-ai min-h-11 rounded-md px-3 text-sm font-medium transition-colors',
+                    // whitespace-nowrap: モバイル幅でタブ文字(「レビュー」等)が縦に折り返すのを防ぐ
+                    'focus-ai min-h-11 whitespace-nowrap rounded-lg px-3 text-sm font-medium transition-colors',
                     mode === m
-                      ? 'bg-ai text-white dark:bg-ai-dim'
+                      ? 'bg-ai text-white shadow-btn dark:bg-ai-dim'
                       : 'text-muted hover:text-on-surface',
                   ].join(' ')}
                 >

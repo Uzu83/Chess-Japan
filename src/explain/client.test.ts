@@ -1,5 +1,21 @@
+import { beforeEach, afterEach, vi } from 'vitest';
 import { isBackendConfigured, localExplanation, requestExplanation } from './client';
 import type { ExplainRequest } from './client';
+
+/*
+ * env の明示 stub(テスト決定性):
+ *   Vitest は Vite 経由で開発者の .env.local(VITE_SUPABASE_URL 等)も読み込む。
+ *   このスイートは「バックエンド未設定」の挙動を検証するため、開発マシンに .env.local が
+ *   あるだけで落ちる環境依存テストになっていた(実際に発生)。stubEnv で空に固定し、
+ *   どの環境でも同じ前提で走るようにする。client.ts 側は env を呼び出し時に読む設計(対応済み)。
+ */
+beforeEach(() => {
+  vi.stubEnv('VITE_SUPABASE_URL', '');
+  vi.stubEnv('VITE_SUPABASE_ANON_KEY', '');
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const baseReq: ExplainRequest = {
   mode: 'explain',
