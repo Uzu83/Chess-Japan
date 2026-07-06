@@ -515,6 +515,20 @@ export function ReviewView({
           ...p,
           [currentPly]: [...(p[currentPly] ?? []), { role: 'assistant', content: text }],
         }));
+      } catch (e) {
+        // WHY catch を足したか(実運用で発覚): 以前は catch 無しで、Gemini の一時 503 等で
+        // 追問が失敗すると未処理 rejection になり、ユーザーには「質問が黙って消えた」ように
+        // 見えていた。エラーもスレッドに吹き出しとして残し、もう一度聞き直せると分からせる。
+        setThreads((p) => ({
+          ...p,
+          [currentPly]: [
+            ...(p[currentPly] ?? []),
+            {
+              role: 'assistant',
+              content: `（応答を取得できませんでした: ${(e as Error).message}。少し待ってからもう一度質問してください）`,
+            },
+          ],
+        }));
       } finally {
         setBusy(false);
       }

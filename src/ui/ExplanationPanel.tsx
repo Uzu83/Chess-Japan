@@ -237,7 +237,11 @@ export function ExplanationPanel({
       ) : showError ? (
         /* 状態 5: エラー
            q-miss-* 変数は @theme 外の CSS 変数のため Tailwind 任意値で参照する。
-           落ち着いた柿色(kaki)で非常事態感を抑えた表現に。                       */
+           落ち着いた柿色(kaki)で非常事態感を抑えた表現に。
+           WHY 再試行ボタンを置くか(実運用で発覚したUX穴): 以前は文言で「再試行してください」と
+           言いながらボタンが無く、一度失敗するとその手はリロードまで行き止まりだった。
+           Gemini 無料枠は一時的な 503(過負荷)を返すことがあり、数秒後の再試行で普通に通る。
+           ボタン1つで復帰できるようにする(onExplain は上書き保存なのでそのまま再利用可)。 */
         <div
           role="alert"
           className="rounded-lg p-3 text-sm"
@@ -248,8 +252,17 @@ export function ExplanationPanel({
         >
           <p className="font-medium">解説を取得できませんでした</p>
           <p className="mt-1 text-xs opacity-80">
-            しばらく経ってから「この手を解説する」を再試行してください。
+            AI側が混み合っている可能性があります。少し待ってから再試行してください。
           </p>
+          <button
+            type="button"
+            onClick={onExplain}
+            disabled={busy}
+            className="focus-ai mt-2 min-h-9 rounded-lg border px-3 text-xs font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
+            style={{ borderColor: 'var(--q-miss-fg)', color: 'var(--q-miss-fg)' }}
+          >
+            再試行
+          </button>
         </div>
       ) : (
         /* 状態 4: 解説あり */
