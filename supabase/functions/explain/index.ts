@@ -405,7 +405,17 @@ async function callGemini(model: string, system: string, user: string): Promise<
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts: [{ text: user }] }],
-        generationConfig: { temperature: 0.4, maxOutputTokens: 500 },
+        // thinkingBudget: 0 — Gemini 2.5 系(無印 flash 等)は thinking モデルで、内部思考トークンが
+        // maxOutputTokens の予算に「含まれる」。500 のままだと思考が予算をほぼ食い潰し、
+        // 本文が数十文字で途切れる実バグが出た(2026-07-07・gemini-2.5-flash で確認)。
+        // 1手解説に多段思考は不要なので thinking を無効化し、500 トークンを全部本文に使わせる。
+        // コスト影響: 減る方向(思考トークン分の課金が消える)。maxOutputTokens=500 の上限は不変。
+        // 注意: 2.5 Pro は thinking を無効化できない(将来 GEMINI_MODEL を Pro にするなら要再設計)。
+        generationConfig: {
+          temperature: 0.4,
+          maxOutputTokens: 500,
+          thinkingConfig: { thinkingBudget: 0 },
+        },
       }),
     },
   );
