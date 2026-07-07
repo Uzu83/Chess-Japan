@@ -228,8 +228,22 @@ export default function ShogiPlaySession({ onReview }: ShogiPlaySessionProps) {
       });
       // await の間にキャンセルされていたら破棄（新規/待った/投了/アンマウント）
       if (myToken !== turnTokenRef.current) return;
-      if (!usi) return; // 指し手なし（詰み等）。outcome が終局を表す
-      game.applyUsi(usi);
+      if (!usi) {
+        // null = bestmove が resign/win/none(実手なし)。既に終局(詰み等)なら outcome が
+        // 真実を語るので何もしない。**続行中に null が来た場合は AI の投了として扱う**
+        // (Codex ゲート② nice-to-have: 放置すると AI 手番のまま無音停止する)。
+        // やねうら王は劣勢で本当に `bestmove resign` を返すので、これは実際に踏む経路。
+        if (!game.outcome().over) {
+          game.resign(oppositeShogiColor(youColorRef.current));
+          setSnap(game.snapshot());
+        }
+        return;
+      }
+      if (!game.applyUsi(usi)) {
+        // 不正 USI(エンジン異常)。無音で固まらせず再試行導線のあるエラー表示へ倒す。
+        setAiError(true);
+        return;
+      }
       setSnap(game.snapshot());
     } catch {
       // エンジンエラー（timeout/worker 終了等）。無言で固まらないようフラグを立てる。
