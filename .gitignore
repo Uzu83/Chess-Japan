@@ -11,6 +11,7 @@ dist-ssr
 
 # engine assets copied from node_modules at build time (large WASM, not committed)
 public/engine
+public/engine-shogi
 
 # env / secrets — 絶対にコミットしない
 .env
