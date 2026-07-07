@@ -41,3 +41,6 @@ coverage
 # supabase
 supabase/.temp
 .supabase
+
+# vite の依存事前バンドルキャッシュ(npm scripts 実行時に生成されることがある)
+.vite

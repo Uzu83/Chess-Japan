@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>プライバシーポリシー — Chess-Japan</title>
+    <!--
+      静的 HTML にしている理由(Codex ゲート①で合意):
+        - SPA 本体にルーターが無く、ポリシーのためだけにルーティングを足すのは過剰
+        - ビルド不要・単独で閲覧可能・将来 i18n するときも独立ファイルとして差し替えやすい
+      スタイルはアプリの「静かな日本的モダン」(藍 #1e3a5f 系・余白重視)を最小限インラインで再現。
+      Tailwind に依存させない(このページ単体で完結させる)。
+    -->
+    <style>
+      :root {
+        --ai: #1e3a5f;
+        --muted: #6b7280;
+        --border: #e5e7eb;
+        --surface: #fdfdfc;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --ai: #93b4d7;
+          --muted: #9ca3af;
+          --border: #374151;
+          --surface: #111827;
+        }
+        body {
+          color: #e5e7eb;
+        }
+      }
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: #1f2937;
+        font-family: 'Hiragino Sans', 'Yu Gothic', system-ui, sans-serif;
+        line-height: 1.9;
+      }
+      main {
+        max-width: 42rem;
+        margin: 0 auto;
+        padding: 3rem 1.25rem 4rem;
+      }
+      h1 {
+        color: var(--ai);
+        font-size: 1.4rem;
+        letter-spacing: 0.05em;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 0.75rem;
+      }
+      h2 {
+        color: var(--ai);
+        font-size: 1.05rem;
+        margin-top: 2.5rem;
+      }
+      p,
+      li {
+        font-size: 0.92rem;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+      a {
+        color: var(--ai);
+      }
+      code {
+        background: rgba(30, 58, 95, 0.08);
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+        font-size: 0.85em;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>プライバシーポリシー</h1>
+      <p class="muted">
+        Chess-Japan — 1手解説AI（https://chess-japan.pages.dev）／最終更新: 2026-07-07
+      </p>
+
+      <p>
+        本サービスは個人が運営する無料のチェス学習サイトです。アカウント登録は不要で、
+        氏名・メールアドレス等の個人情報を収集する機能はありません。
+        本ページでは、サービスの動作上取り扱う情報を説明します。
+      </p>
+
+      <h2>1. ブラウザ内にのみ保存される情報</h2>
+      <ul>
+        <li>
+          対局履歴・棋譜・内部レート・解説キャッシュは、お使いのブラウザの localStorage
+          にのみ保存されます。
+        </li>
+        <li>
+          これらが運営者のサーバーへ送信・収集されることはありません。ブラウザのサイトデータ削除でいつでも消去できます。
+        </li>
+      </ul>
+
+      <h2>2. AI 解説リクエスト時に送信される情報</h2>
+      <ul>
+        <li>
+          「この一手を解説」等を実行したときのみ、局面情報（FEN）・指し手・エンジン評価値などの
+          <strong>盤面データ</strong>が当サービスのサーバー（Supabase Edge Function）へ送信され、
+          解説文生成のため外部の大規模言語モデル API に転送されます。 現在の転送先は Google Gemini
+          API（Google LLC）です。運用上、転送先モデルは変更されることがあります。
+        </li>
+        <li>
+          盤面データに個人情報は含まれません。生成された解説文は品質・コスト最適化のためサーバー側にキャッシュされます。
+        </li>
+      </ul>
+
+      <h2>3. IP アドレスの取り扱い</h2>
+      <ul>
+        <li>
+          解説リクエスト時、濫用防止（レート制限）のため IP アドレスを一時的にサーバーへ保存します。
+          保存は期限付きで、期限経過後に自動削除されます（最長でも数日以内）。
+        </li>
+        <li>
+          bot 対策として Cloudflare Turnstile（Cloudflare, Inc.）を利用しており、 検証のため IP
+          アドレス等が Cloudflare に送信されます。 詳細は
+          <a href="https://www.cloudflare.com/privacypolicy/" rel="noreferrer"
+            >Cloudflare のプライバシーポリシー</a
+          >
+          をご覧ください。
+        </li>
+        <li>
+          ホスティング（Cloudflare Pages）のアクセス処理においても、通信の性質上 IP アドレスが
+          Cloudflare を経由します。
+        </li>
+      </ul>
+
+      <h2>4. エラー監視（Sentry）</h2>
+      <ul>
+        <li>
+          サービス品質改善のため、エラー発生時にエラー内容・ブラウザ種別・当サイト内の
+          URL（クエリ等は除去）を Sentry（Functional Software, Inc.）に送信することがあります。
+        </li>
+        <li>
+          個人を特定する情報を意図的に付与しない設定（<code>sendDefaultPii: false</code
+          >）で運用しています。
+        </li>
+      </ul>
+
+      <h2>5. アクセス解析（導入予定）</h2>
+      <ul>
+        <li>
+          今後、Cloudflare Web Analytics（Cookie を使用しない、個人を追跡しない集計型の解析）を
+          導入する場合があります。導入時は本ページを更新します。
+        </li>
+      </ul>
+
+      <h2>6. お問い合わせ</h2>
+      <p>
+        本ポリシーやサービスに関するお問い合わせは
+        <a href="https://github.com/Uzu83/Chess-Japan/issues" rel="noreferrer">GitHub Issues</a>
+        にお寄せください。
+        <strong>Issues は誰でも閲覧できる公開の場です。個人情報を書き込まないでください。</strong>
+        GitHub 利用時の情報の取り扱いは GitHub, Inc. のプライバシーポリシーに従います。
+      </p>
+
+      <p style="margin-top: 3rem"><a href="/">← Chess-Japan へ戻る</a></p>
+    </main>
+  </body>
+</html>
