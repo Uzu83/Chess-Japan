@@ -97,8 +97,12 @@ function isCrossOriginIsolated(): boolean {
 export class YaneuraOuEngine implements ChessEngine {
   private module: YaneuraOuModule | null = null;
   private url: string;
-  // chooseMove の直列化チェーン（stockfish.ts と同一思想の混線防止。詳細はそちらの注釈参照）。
-  private chooseChain: Promise<unknown> = Promise.resolve();
+  // 全エンジン操作(analyze/chooseMove)の直列化チェーン(stockfish.ts と同一思想の混線防止)。
+  // WHY analyze も直列化するか(Codex ゲート②blocking #2): ReviewView は単手解析・全手解析・
+  // 高速ナビゲーションで analyze を重ねられる。直列化しないと同一 module に複数リスナーが
+  // 張られ、1つの bestmove で別リクエストが resolve する混線が起きる。エンジンは同時に
+  // 1 探索しかできないので、チェーンで並べるのが正しい形。
+  private opChain: Promise<unknown> = Promise.resolve();
 
   constructor(url: string = DEFAULT_GLUE_URL) {
     this.url = url;
@@ -168,6 +172,13 @@ export class YaneuraOuEngine implements ChessEngine {
 
   /** 局面(SFEN)を解析する。振り返り用＝常に最善を尽くさせる（SkillLevel 満点・NodesLimit 解除）。 */
   async analyze(sfen: string, opts: AnalyzeOptions = {}): Promise<AnalysisResult> {
+    // 直列化(ゲート②blocking #2)。先行操作の失敗は自分に伝播させない(catch で吸収)。
+    const run = this.opChain.then(() => this.analyzeInternal(sfen, opts));
+    this.opChain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async analyzeInternal(sfen: string, opts: AnalyzeOptions = {}): Promise<AnalysisResult> {
     if (!this.module) await this.init();
     const mod = this.module!;
     const depth = opts.depth ?? 12;
@@ -186,6 +197,12 @@ export class YaneuraOuEngine implements ChessEngine {
     return new Promise<AnalysisResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         mod.removeMessageListener(onMsg);
+        // timeout 経路は探索が drain されない。chooseMove と同様に module を破棄して縁を切り、
+        // 次回 init で作り直す(遅れて届く旧局面 bestmove の誤配送を断つ — ゲート②blocking #2)。
+        if (this.module === mod) {
+          mod.terminate();
+          this.module = null;
+        }
         reject(new Error('analyze timeout'));
       }, 60_000);
 
@@ -224,8 +241,9 @@ export class YaneuraOuEngine implements ChessEngine {
    * null に丸める（"resign" 等を指し手文字列として流さない＝usi.ts の UsiBestMove 分離の意図を守る）。
    */
   async chooseMove(sfen: string, opts: PlayOptions = {}): Promise<string | null> {
-    const run = this.chooseChain.then(() => this.chooseMoveInternal(sfen, opts));
-    this.chooseChain = run.catch(() => undefined);
+    // analyze と同じチェーンで直列化(単一エンジンに対する操作は全て一列に並べる)。
+    const run = this.opChain.then(() => this.chooseMoveInternal(sfen, opts));
+    this.opChain = run.catch(() => undefined);
     return run;
   }
 

@@ -301,11 +301,24 @@ export function ReviewView({
    *   そこへ入れると、次回起動で chess として復元しようとして壊れる。MVP では将棋は永続化せず
    *   （再解析は許容）、loadedPgn=null にして両永続化 effect を確実にスキップさせる。
    */
+  /*
+   * ロード世代ガード(Codex ゲート②blocking #1):
+   *   loadShogi は動的 import を await する間にユーザーがチェスへ戻れる。ガード無しだと
+   *   「kind==='chess' なのに model.kind==='shogi'」が着弾し、チェス盤に SFEN が渡る・
+   *   保存/共有/解説の状態が食い違う、という不整合が起きる。世代番号(seq)と現在 kind
+   *   (kindRef)の両方を commit 直前に検査し、古いロード・対象外 kind の結果は黙って捨てる。
+   */
+  const shogiLoadSeqRef = useRef(0);
+  const kindRef = useRef<GameKind>('chess'); // setKind と同時に手動更新(await 越しに最新 kind を読む)
+
   const loadShogi = useCallback(async (text: string) => {
+    const seq = ++shogiLoadSeqRef.current;
     setShogiLoading(true);
     try {
       const { shogiGameModel } = await import('../core/shogiGame');
       const m = shogiGameModel(text);
+      // race ガード: このロードが最新で、かつ今も将棋モードのときだけ commit する
+      if (seq !== shogiLoadSeqRef.current || kindRef.current !== 'shogi') return;
       setModel(m);
       setIndex(0);
       setContexts({});
@@ -317,11 +330,13 @@ export function ReviewView({
       setAnalyzeAllProgress(null);
       ++analyzeToken.current;
     } catch (e) {
+      if (seq !== shogiLoadSeqRef.current || kindRef.current !== 'shogi') return;
       setError(`将棋の棋譜を読み込めませんでした: ${(e as Error).message}`);
       setModel(null);
       setLoadedPgn(null);
     } finally {
-      setShogiLoading(false);
+      // ローディング表示は「最新のロード」だけが畳む(古いロードが新しい表示を消さない)
+      if (seq === shogiLoadSeqRef.current) setShogiLoading(false);
     }
   }, []);
 
@@ -333,6 +348,7 @@ export function ReviewView({
   const switchKind = useCallback(
     (k: GameKind) => {
       if (k === kind) return;
+      kindRef.current = k; // loadShogi の race ガードが await 越しに読む(state 更新は非同期のため)
       setKind(k);
       setIndex(0);
       if (k === 'shogi') {
@@ -1130,7 +1146,10 @@ export function ReviewView({
                   disabled={
                     analyzeAllProgress !== null ||
                     engineKind === 'loading' ||
-                    engineKind === 'unsupported'
+                    engineKind === 'unsupported' ||
+                    // 0手モデル(SFEN 単体等)では解析対象が無く、進捗が 0/0 = NaN% になる
+                    // (Codex ゲート② nice-to-have)。押せなくして構造的に防ぐ。
+                    moveRecords.length === 0
                   }
                   className="focus-ai shrink-0 rounded-lg border border-ai px-3 py-2 text-sm font-medium text-ai transition-colors hover:bg-ai-bg disabled:cursor-not-allowed disabled:opacity-50 dark:border-ai-muted dark:text-ai-muted dark:hover:bg-ai-deep"
                 >
