@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="robots" content="noindex" />
+    <!-- noindex は付けない(Codex ゲート②合意): 公開サービスのポリシーが検索可能なのは信頼性の面でプラス -->
     <title>プライバシーポリシー — Chess-Japan</title>
     <!--
       静的 HTML にしている理由(Codex ゲート①で合意):
@@ -13,11 +13,16 @@
       Tailwind に依存させない(このページ単体で完結させる)。
     -->
     <style>
+      /* 文字色も変数化する(Codex ゲート②blocking 指摘の修正)。
+         WHY: media query 内の body ルールは「後に書かれた同一詳細度の通常 body ルール」に
+         上書きされる(詳細度が同じならソース順が勝つ)。色は全て :root 変数に寄せ、
+         body は変数参照だけにするのが正しい構造。 */
       :root {
         --ai: #1e3a5f;
         --muted: #6b7280;
         --border: #e5e7eb;
         --surface: #fdfdfc;
+        --text: #1f2937;
       }
       @media (prefers-color-scheme: dark) {
         :root {
@@ -25,15 +30,13 @@
           --muted: #9ca3af;
           --border: #374151;
           --surface: #111827;
-        }
-        body {
-          color: #e5e7eb;
+          --text: #e5e7eb;
         }
       }
       body {
         margin: 0;
         background: var(--surface);
-        color: #1f2937;
+        color: var(--text);
         font-family: 'Hiragino Sans', 'Yu Gothic', system-ui, sans-serif;
         line-height: 1.9;
       }

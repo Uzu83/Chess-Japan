@@ -38,25 +38,41 @@ export function initSentryIfConfigured(): void {
   // 失敗しても本体機能に影響させない(監視はベストエフォート)。
   import('@sentry/react')
     .then((Sentry) => {
+      // URL から query/hash を落とす共通 scrub。
+      // WHY: 現状 URL に個人情報を乗せる設計は無いが、将来誰かが ?fen=... のような
+      // パラメータを足したときに黙って Sentry へ流れる事故を先回りで防ぐ(ゲート①②合意)。
+      // パース不能なら undefined(欠損させる方が漏洩より安全)。
+      const stripQuery = (raw: string): string | undefined => {
+        try {
+          // 相対 URL(navigation breadcrumb の from/to はパスのことがある)も解決できるよう base を渡す
+          const u = new URL(raw, window.location.origin);
+          return u.origin + u.pathname;
+        } catch {
+          return undefined;
+        }
+      };
       Sentry.init({
         dsn,
         sendDefaultPii: false,
         // パフォーマンストレースは送らない(エラー監視専用。quota 節約)。
         tracesSampleRate: 0,
-        // 最小 scrub(Codex 指摘の採用): URL の query/hash を落とす。
-        // 現状 URL に個人情報を乗せる設計は無いが、将来誰かが ?fen=... のような
-        // パラメータを足したときに黙って Sentry へ流れる事故を先回りで防ぐ。
         beforeSend(event) {
           if (event.request?.url) {
-            try {
-              const u = new URL(event.request.url);
-              event.request.url = u.origin + u.pathname;
-            } catch {
-              // URL パース不能なら丸ごと落とす(欠損させる方が漏洩より安全)
-              event.request.url = undefined;
-            }
+            event.request.url = stripQuery(event.request.url);
           }
           return event;
+        },
+        // breadcrumbs にも URL が乗る(navigation の from/to、fetch/xhr の url — Codex ゲート②
+        // blocking 指摘)。beforeSend の request.url だけでは片肺なので、ここでも同じ scrub を通す。
+        beforeBreadcrumb(breadcrumb) {
+          const data = breadcrumb.data;
+          if (data) {
+            for (const key of ['url', 'from', 'to'] as const) {
+              const v = data[key];
+              if (typeof v === 'string') data[key] = stripQuery(v);
+            }
+          }
+          return breadcrumb;
         },
       });
     })
