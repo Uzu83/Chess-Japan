@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ReviewView } from './ui/ReviewView';
 import { PlayView } from './ui/PlayView';
+import type { GameKind } from './core/types';
 import { AuthProvider } from './auth/AuthContext';
 import { useAuth } from './auth/authState';
 import { AuthButton } from './ui/AuthButton';
@@ -44,15 +45,19 @@ function OnboardingGate() {
  *     ReviewView はエンジン worker を余分に起動しないよう「初めてレビューを開くまで遅延マウント」し、
  *     以降は hidden で状態保持する。
  *   「この対局を振り返る」導線:
- *     PlayView が終局 PGN を onReview で渡す → reviewKey を進めて ReviewView を再マウントし、
- *     initialPgn として最優先ロードさせる(ReviewView 側の初期化優先順位 0 番)。
+ *     PlayView が終局棋譜を onReview({kind,text}) で渡す → reviewKey を進めて ReviewView を再マウントし、
+ *     initialRecord として最優先ロードさせる(ReviewView 側の初期化優先順位 0 番。chess=PGN/shogi=KIF)。
  */
 function App() {
   const [isolated, setIsolated] = useState<boolean | null>(null);
   const [mode, setMode] = useState<Mode>('play');
 
-  // レビューへ渡す PGN と、振り返りのたびに ReviewView を再マウントするための key。
-  const [reviewPgn, setReviewPgn] = useState<string | undefined>(undefined);
+  // レビューへ渡す棋譜（kind + 本文）と、振り返りのたびに ReviewView を再マウントするための key。
+  // WHY kind も持つか（Codex 修正 #2）: 対局は chess=PGN / shogi=KIF の 2 種を振り返りへ渡すため、
+  // 本文だけでなくどちらのゲームかを伝える必要がある（ReviewView 側で盤/エンジン/パーサを切替）。
+  const [reviewRecord, setReviewRecord] = useState<{ kind: GameKind; text: string } | undefined>(
+    undefined,
+  );
   const [reviewKey, setReviewKey] = useState(0);
   // ReviewView を一度でもマウントしたか(遅延マウント + 以降 hidden 保持)。
   const [reviewMounted, setReviewMounted] = useState(false);
@@ -61,9 +66,9 @@ function App() {
     setIsolated(typeof window !== 'undefined' ? window.crossOriginIsolated : null);
   }, []);
 
-  // 対局からの「振り返る」: PGN を渡してレビューへ切り替え(再マウントで最優先ロード)。
-  const handleReview = (pgn: string) => {
-    setReviewPgn(pgn);
+  // 対局からの「振り返る」: 棋譜(kind + 本文)を渡してレビューへ切り替え(再マウントで最優先ロード)。
+  const handleReview = (record: { kind: GameKind; text: string }) => {
+    setReviewRecord(record);
     setReviewKey((k) => k + 1);
     setReviewMounted(true);
     setMode('review');
@@ -185,12 +190,12 @@ function App() {
           </div>
 
           {/* ReviewView は初回レビューまで遅延マウント。以降 hidden で状態保持。
-            reviewKey を変えると再マウントされ initialPgn を最優先で読み込む。 */}
+            reviewKey を変えると再マウントされ initialRecord を最優先で読み込む(chess=PGN/shogi=KIF)。 */}
           {reviewMounted && (
             <div className={mode === 'review' ? '' : 'hidden'}>
               <ReviewView
                 key={reviewKey}
-                initialPgn={reviewPgn}
+                initialRecord={reviewRecord}
                 active={mode === 'review'}
                 onPlayFrom={handlePlayFrom}
               />

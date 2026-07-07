@@ -16,11 +16,12 @@
  *   "cj:" プレフィックスで他アプリとの衝突を避ける。
  *   "cj:ctx:<pgnHash>"  = 解析済みコンテキスト
  *   "cj:session"        = セッション(最終棋譜・レベル・向き・ヒント既読)
- *   "cj:games"          = 対局履歴(AI戦で指した対局のリスト・新しい順)
- *   "cj:rating"         = ローカル内部レート(AI戦のレート戦で変動。Phase 2C でクラウド同期に昇格予定)
+ *   "cj:games"          = 対局履歴(AI戦で指した対局のリスト・新しい順。chess/shogi 混在。game タグで区別)
+ *   "cj:rating"         = チェスのローカル内部レート(AI戦のレート戦で変動。Phase 2C でクラウド同期に昇格予定)
+ *   "cj:rating:shogi"   = 将棋のローカル内部レート(チェスと別枠。別ゲームの強さは別物なので混ぜない — Codex ゲート① 質問3回答)
  */
 
-import type { ExplanationContext } from './types';
+import type { ExplanationContext, GameKind } from './types';
 
 /** 破壊的スキーマ変更時にインクリメントする。旧データは無視される。 */
 const SCHEMA_VERSION = 1;
@@ -169,7 +170,16 @@ export interface PlayedGame {
   id: string;
   /** 作成時刻(epoch ms、呼び出し側で採番)。 */
   createdAt: number;
-  /** ヘッダ付き PGN(振り返りにそのまま渡せる)。 */
+  /**
+   * 棋譜文字列。chess=ヘッダ付き PGN / shogi=KIF。
+   *
+   * WHY 将棋の KIF もこの `pgn` フィールドに入れるか（フィールド名の負債を許容する判断・Codex ゲート① 修正 #3）:
+   *   本来なら `record`/`text` のような中立名が正しい。しかし `pgn` を `record` にリネームすると
+   *   ①既存 localStorage の全レコードが isPlayedGame の型ガードを外れて丸ごと落ちる（履歴消失）
+   *   ②`serializePlayedGames`/`deserializePlayedGames` の後方互換が壊れる。
+   *   履歴を1件も失わないことを最優先し、フィールド名の負債（"pgn" に KIF が入る不正確さ）を
+   *   あえて許容する。どちらの棋譜かは `game` タグで判別する（振り返り接続もこのタグで分岐）。
+   */
   pgn: string;
   /** 絶対表記の結果: '1-0' | '0-1' | '1/2-1/2' | '*'。 */
   result: string;
@@ -181,6 +191,27 @@ export interface PlayedGame {
   opponent: string;
   /** 手数。 */
   moveCount: number;
+  /**
+   * ゲーム種別。**optional**。
+   *
+   * WHY optional か（既存履歴を1件も落とさない移行・Codex ゲート① 修正 #3）:
+   *   Phase 4-2 以前に保存されたレコードにはこのフィールドが無い。必須にすると型ガードで
+   *   旧レコードが全滅する。よって optional にし、読み込み側は `game ?? 'chess'`（= playedGameKind）で
+   *   欠落を chess とみなす。デシリアライザは値を注入せず素通し（round-trip の純粋性を保つため）。
+   */
+  game?: GameKind;
+}
+
+/**
+ * レコードのゲーム種別を解決する（欠落＝旧チェス履歴 → 'chess'）。
+ *
+ * WHY デシリアライズ時に注入せずここで解決するか:
+ *   deserializePlayedGames に `game: 'chess'` を注入すると、`game` を持たない既存レコードで
+ *   round-trip（serialize→deserialize が入力と一致）が崩れ、既存テストのアサーションを壊す。
+ *   よって永続層は値をそのまま保ち、**読み出し・フィルタ地点でこの関数を通して** 正規化する。
+ */
+export function playedGameKind(g: PlayedGame): GameKind {
+  return g.game ?? 'chess';
 }
 
 /** 対局履歴リストのペイロード型(バージョン付き)。 */
@@ -204,7 +235,9 @@ function isPlayedGame(v: unknown): v is PlayedGame {
       g['outcome'] === 'unfinished') &&
     (g['youColor'] === 'white' || g['youColor'] === 'black') &&
     typeof g['opponent'] === 'string' &&
-    typeof g['moveCount'] === 'number'
+    typeof g['moveCount'] === 'number' &&
+    // game は optional。欠落（旧チェス履歴）も許容し、存在する場合のみ値を検証する。
+    (g['game'] === undefined || g['game'] === 'chess' || g['game'] === 'shogi')
   );
 }
 
@@ -243,8 +276,16 @@ export function appendPlayedGame(existing: PlayedGame[], game: PlayedGame): Play
 
 // ── ローカル内部レート(AI戦) ─────────────────────────────────
 
-/** レート保存キー。 */
+/** チェスのレート保存キー（歴史的キー。挙動不変のため名前は据え置き）。 */
 const RATING_KEY = 'cj:rating';
+
+/** 将棋のレート保存キー（チェスと別枠。Codex ゲート① 質問3回答）。 */
+const RATING_SHOGI_KEY = 'cj:rating:shogi';
+
+/** kind → レート保存キー。chess は既存キーへ委譲して従来挙動を1バイトも変えない。 */
+function ratingKeyFor(kind: GameKind): string {
+  return kind === 'shogi' ? RATING_SHOGI_KEY : RATING_KEY;
+}
 
 /**
  * ローカルレートの保存データ。
@@ -293,6 +334,35 @@ export function loadRating(): RatingData | null {
 export function saveRating(data: RatingData): void {
   try {
     localStorage.setItem(RATING_KEY, serializeRating(data));
+  } catch {
+    // QuotaExceeded / SecurityError → 無視
+  }
+}
+
+/**
+ * kind 別のレートを読む（chess は既存 cj:rating・shogi は cj:rating:shogi）。
+ * 無し・破損は null（呼び出し側が INITIAL_RATING で初期化）。
+ *
+ * WHY loadRating/saveRating を残したまま Xxx For を足すか:
+ *   既存の loadRating/saveRating（cj:rating 固定）はシグネチャ・挙動とも据え置く義務がある
+ *   （OnboardingRatingDialog 等が依存・チェス経路を1挙動も変えない）。chess はここから委譲する。
+ */
+export function loadRatingFor(kind: GameKind): RatingData | null {
+  if (kind === 'chess') return loadRating();
+  try {
+    const json = localStorage.getItem(ratingKeyFor(kind));
+    if (!json) return null;
+    return deserializeRating(json);
+  } catch {
+    return null;
+  }
+}
+
+/** kind 別のレートを保存（chess は既存 saveRating へ委譲）。書き込み失敗は握る。 */
+export function saveRatingFor(kind: GameKind, data: RatingData): void {
+  if (kind === 'chess') return saveRating(data);
+  try {
+    localStorage.setItem(ratingKeyFor(kind), serializeRating(data));
   } catch {
     // QuotaExceeded / SecurityError → 無視
   }

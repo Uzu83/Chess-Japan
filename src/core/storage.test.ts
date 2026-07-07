@@ -15,6 +15,10 @@ import {
   deletePlayedGame,
   serializeRating,
   deserializeRating,
+  playedGameKind,
+  loadRatingFor,
+  saveRatingFor,
+  loadRating,
   type SessionData,
   type PlayedGame,
   type RatingData,
@@ -263,6 +267,40 @@ describe('serializePlayedGames / deserializePlayedGames', () => {
   });
 });
 
+// ── game タグ（chess/shogi 移行）───────────────────────────────
+
+describe('PlayedGame の game タグ（後方互換移行）', () => {
+  it('game 欠落レコード（旧チェス履歴）も型ガードを通り、round-trip で欠落のまま保たれる', () => {
+    // makeGame は game を持たない = 旧レコード相当。
+    const games = [makeGame('legacy', 1)];
+    const restored = deserializePlayedGames(serializePlayedGames(games));
+    expect(restored).toEqual(games); // game を注入しない（純粋 round-trip）
+    expect(restored?.[0].game).toBeUndefined();
+  });
+
+  it('game=shogi を明示したレコードは値を保って往復する', () => {
+    const g: PlayedGame = { ...makeGame('s'), game: 'shogi', pgn: '手合割：平手\n' };
+    const restored = deserializePlayedGames(serializePlayedGames([g]));
+    expect(restored?.[0].game).toBe('shogi');
+  });
+
+  it('game が不正値のレコードは型ガードで除外される', () => {
+    const json = JSON.stringify({
+      version: 1,
+      games: [makeGame('ok'), { ...makeGame('bad'), game: 'checkers' }],
+    });
+    const result = deserializePlayedGames(json);
+    expect(result).toHaveLength(1);
+    expect(result?.[0].id).toBe('ok');
+  });
+
+  it('playedGameKind: 欠落は chess、明示はその値', () => {
+    expect(playedGameKind(makeGame('a'))).toBe('chess');
+    expect(playedGameKind({ ...makeGame('b'), game: 'chess' })).toBe('chess');
+    expect(playedGameKind({ ...makeGame('c'), game: 'shogi' })).toBe('shogi');
+  });
+});
+
 describe('appendPlayedGame', () => {
   it('新しい対局が先頭に入る', () => {
     const result = appendPlayedGame([makeGame('old')], makeGame('new'));
@@ -355,5 +393,29 @@ describe('serializeRating / deserializeRating', () => {
     expect(
       deserializeRating(JSON.stringify({ version: 1, rating: Infinity, games: 0 })),
     ).toBeNull();
+  });
+});
+
+describe('loadRatingFor / saveRatingFor（kind 別レート枠）', () => {
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', new MemoryStorage());
+  });
+
+  it('chess は既存 cj:rating に委譲する（loadRating と同一の値を読む）', () => {
+    saveRatingFor('chess', { rating: 1350, games: 5 });
+    expect(loadRatingFor('chess')).toEqual({ rating: 1350, games: 5 });
+    // 既存 API と同じキーを触っていることの確認（挙動不変の保証）
+    expect(loadRating()).toEqual({ rating: 1350, games: 5 });
+  });
+
+  it('shogi は別キーに保存され、chess と混ざらない', () => {
+    saveRatingFor('chess', { rating: 1350, games: 5 });
+    saveRatingFor('shogi', { rating: 900, games: 2 });
+    expect(loadRatingFor('shogi')).toEqual({ rating: 900, games: 2 });
+    expect(loadRatingFor('chess')).toEqual({ rating: 1350, games: 5 }); // 汚染されない
+  });
+
+  it('未保存の shogi レートは null（呼び出し側が初期値で初期化）', () => {
+    expect(loadRatingFor('shogi')).toBeNull();
   });
 });

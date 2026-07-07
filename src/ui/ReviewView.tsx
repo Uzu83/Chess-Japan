@@ -110,8 +110,8 @@ const SHARE_MAX_PGN_CHARS = 5000;
  */
 
 /**
- * @param initialPgn 対局(PlayView)からの「振り返る」で渡される PGN。
- *   指定時は URL ハッシュ・セッション・サンプルより優先してこの棋譜をロードする。
+ * @param initialRecord 対局(PlayView)からの「振り返る」で渡される棋譜（kind + 本文。chess=PGN / shogi=KIF）。
+ *   指定時は URL ハッシュ・セッション・サンプルより優先してこの棋譜をロードする（Codex 修正 #2）。
  *   App は振り返りのたびに key を変えて ReviewView を再マウントするため、この prop は
  *   マウント毎に固定値になる(=マウント時初期化ロジックだけで正しく反映される)。
  * @param active このビューが現在表示中か(既定 true)。
@@ -121,11 +121,11 @@ const SHARE_MAX_PGN_CHARS = 5000;
  *   潰してしまう(reviewer 指摘の回帰)。active=false のときはグローバルリスナーを張らない。
  */
 export function ReviewView({
-  initialPgn,
+  initialRecord,
   active = true,
   onPlayFrom,
 }: {
-  initialPgn?: string;
+  initialRecord?: { kind: GameKind; text: string };
   active?: boolean;
   /**
    * 「この局面から対局」(Phase 2B)。現在表示中の局面 FEN を対局画面へ引き渡す。
@@ -133,7 +133,10 @@ export function ReviewView({
    */
   onPlayFrom?: (fen: string) => void;
 } = {}) {
-  const [pgnText, setPgnText] = useState(initialPgn ?? SAMPLE_PGN);
+  // chess の PGN 初期値。将棋レコードのときはサンプル PGN のまま（将棋本文は shogiText へ）。
+  const [pgnText, setPgnText] = useState(
+    initialRecord?.kind === 'chess' ? initialRecord.text : SAMPLE_PGN,
+  );
   // model は GameModel（chess/shogi 共通の薄い読み取り面）。UI・解析ループはこれ経由で動く。
   const [model, setModel] = useState<GameModel | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -147,9 +150,12 @@ export function ReviewView({
 
   // ── 将棋モード関連 ──────────────────────────────────────────
   // kind: 現在のゲーム種別（既定 chess＝チェス利用者の体験を一切変えない）。
-  const [kind, setKind] = useState<GameKind>('chess');
+  // 対局からの将棋振り返り(initialRecord.kind==='shogi')のときだけ初手から shogi でマウントする。
+  const [kind, setKind] = useState<GameKind>(initialRecord?.kind ?? 'chess');
   // 将棋の棋譜入力（KIF/CSA/SFEN 等）。チェスの pgnText と分離して chess 経路を汚さない。
-  const [shogiText, setShogiText] = useState(SAMPLE_KIF);
+  const [shogiText, setShogiText] = useState(
+    initialRecord?.kind === 'shogi' ? initialRecord.text : SAMPLE_KIF,
+  );
   // 将棋棋譜パース中フラグ（tsshogi の動的 import 待ち）。
   const [shogiLoading, setShogiLoading] = useState(false);
 
@@ -379,11 +385,24 @@ export function ReviewView({
    *   loadPgn は直接 pgn 文字列を引数に取るため、状態更新と同時に呼べる。
    */
   useEffect(() => {
-    // 0. 対局からの振り返り(initialPgn)。最優先。
+    // 0. 対局からの振り返り(initialRecord)。最優先。
     //    PlayView が指した対局をそのまま解析できるよう、他の復元より先に読む。
-    if (initialPgn) {
-      setPgnText(initialPgn);
-      loadPgn(initialPgn, { restoreCtx: true });
+    if (initialRecord) {
+      if (initialRecord.kind === 'shogi') {
+        // WHY kindRef を setKind より先に同期で立てるか（Codex 修正 #2・4-1 の race ガードと整合）:
+        //   loadShogi は tsshogi の動的 import を await する間、commit 直前に kindRef.current!=='shogi'
+        //   だと結果を黙って捨てる（世代ガード）。setKind の反映は非同期なので、await 越しに最新 kind を
+        //   読む kindRef を先に 'shogi' へ倒しておかないと、対局からの将棋振り返りが commit されず空になる。
+        kindRef.current = 'shogi';
+        setKind('shogi');
+        setShogiText(initialRecord.text);
+        void loadShogi(initialRecord.text);
+      } else {
+        kindRef.current = 'chess';
+        setKind('chess');
+        setPgnText(initialRecord.text);
+        loadPgn(initialRecord.text, { restoreCtx: true });
+      }
       return;
     }
 
@@ -412,7 +431,8 @@ export function ReviewView({
     // 3. サンプル自動ロード(初回訪問 → 空画面でなく対局が見える状態で出迎える)
     loadPgn(SAMPLE_PGN);
     // pgnText の初期値は SAMPLE_PGN なので setPgnText は不要
-  }, [loadPgn, initialPgn]); // loadPgn は安定。initialPgn はマウント毎固定(App が key で再マウント)
+    // loadPgn/loadShogi は安定。initialRecord はマウント毎固定(App が key で再マウント)。
+  }, [loadPgn, loadShogi, initialRecord]);
 
   // ── セッション永続化 ────────────────────────────────────────
   // loadedPgn・level・orientation・hintDismissed が変わるたびに保存。

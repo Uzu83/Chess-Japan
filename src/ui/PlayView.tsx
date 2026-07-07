@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   PlayGame,
   opposite,
@@ -10,16 +10,31 @@ import { materialFromFen, lostPieces, type PieceLetter } from '../core/material'
 import { applyResult, INITIAL_RATING, type GameScore } from '../core/rating';
 import { createEngine, type EngineKind } from '../engine/factory';
 import type { ChessEngine } from '../engine/types';
+import type { GameKind } from '../core/types';
 import {
   loadPlayedGames,
   savePlayedGame,
   deletePlayedGame,
   loadRating,
   saveRating,
+  playedGameKind,
   type PlayedGame,
   type RatingData,
 } from '../core/storage';
 import { PlayBoard } from './PlayBoard';
+
+/*
+ * ShogiPlaySession は将棋タブを開いたときだけ読み込む（React.lazy で code-split）。
+ * WHY（1バイト不変条件）: 将棋一式(tsshogi/shogiground/やねうら王) をチェス利用者のメインチャンクに
+ *   1 バイトも載せない。ここを static import にすると shogiground 等がメインへ漏れるので必ず動的 import。
+ *   ReviewView が ShogiBoard を lazy 化しているのと同じ規律。ShogiPlaySession は default export。
+ */
+const ShogiPlaySession = lazy(() => import('./ShogiPlaySession'));
+
+/** 対局履歴からチェスの対局だけを取り出す（将棋は ShogiPlaySession 側で表示・Codex 修正 #3）。 */
+function loadChessHistory(): PlayedGame[] {
+  return loadPlayedGames().filter((g) => playedGameKind(g) === 'chess');
+}
 
 /*
  * PlayView — AI 戦(対局)画面
@@ -125,8 +140,11 @@ function newId(): string {
 }
 
 interface PlayViewProps {
-  /** 「この対局を振り返る」で PGN をレビュー画面へ引き渡すコールバック。 */
-  onReview: (pgn: string) => void;
+  /**
+   * 「この対局を振り返る」でレビュー画面へ引き渡すコールバック（kind 対応・Codex 修正 #2）。
+   * chess は PGN、shogi は KIF を text に載せ、kind でレビュー側の分岐を決める。
+   */
+  onReview: (record: { kind: GameKind; text: string }) => void;
   /**
    * レビュー画面からの「この局面から対局」(Phase 2B)。
    * nonce を変えて渡すたびに、その FEN からカジュアル対局(レート変動なし)を開始する。
@@ -136,6 +154,16 @@ interface PlayViewProps {
 }
 
 export function PlayView({ onReview, playFrom }: PlayViewProps) {
+  // ── ゲーム種別（チェス/将棋 切替・Codex 修正 #1: 共通シェル + kind 別セッション） ──
+  // 既定 chess（チェス利用者の体験を一切変えない）。将棋は初回選択時に mount し、以降 hidden で保持
+  // （App の reviewMounted と同型。切替で進行中の対局を失わない）。
+  const [kind, setKind] = useState<GameKind>('chess');
+  const [shogiMounted, setShogiMounted] = useState(false);
+  const switchKind = useCallback((k: GameKind) => {
+    if (k === 'shogi') setShogiMounted(true);
+    setKind(k);
+  }, []);
+
   // ── エンジン ────────────────────────────────────────────────
   const engineRef = useRef<ChessEngine | null>(null);
   const [engineKind, setEngineKind] = useState<EngineKind | 'loading'>('loading');
@@ -221,9 +249,9 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
     };
   }, []);
 
-  // ── 履歴の初期ロード ────────────────────────────────────────
+  // ── 履歴の初期ロード（チェスのみ表示） ──────────────────────
   useEffect(() => {
-    setHistory(loadPlayedGames());
+    setHistory(loadChessHistory());
   }, []);
 
   // ── AI に1手指させる ────────────────────────────────────────
@@ -373,8 +401,8 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
     setAiThinking(false);
     setAiError(false);
     setSnap(null);
-    // 履歴を最新化(直前対局が保存されている可能性)
-    setHistory(loadPlayedGames());
+    // 履歴を最新化(直前対局が保存されている可能性。チェスのみ表示)
+    setHistory(loadChessHistory());
   }, []);
 
   // ── 終局時に履歴へ自動保存 + レート更新 ─────────────────────
@@ -408,8 +436,9 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
         youColor,
         opponent,
         moveCount: snap.moveCount,
+        game: 'chess', // チェスの対局であることを明示（将棋履歴と分離するタグ）
       };
-      setHistory(savePlayedGame(played));
+      setHistory(savePlayedGame(played).filter((g) => playedGameKind(g) === 'chess'));
     }
 
     /*
@@ -482,164 +511,217 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
   // ── 描画 ────────────────────────────────────────────────────
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">
-      {/* エンジン状態(常時表示。設定/対局どちらでも見える) */}
-      <div className="mb-5 flex flex-wrap items-center gap-2">
-        <span className="text-xs text-subtle">対局相手エンジン: {engineLabel}</span>
+      {/* ── [チェス|将棋] 切替（Codex 修正 #1: 共通シェル + kind 別セッション） ──
+          ReviewView の kind トグルと同じ aria-pressed イディオム。チェス側は下で「完全にそのまま」
+          描画し、将棋側は下で lazy 読み込みする。ここに切替を足すだけ（チェス経路は無改修）。 */}
+      <div
+        aria-label="ゲーム種別切替"
+        className="mb-4 flex w-fit rounded-lg border border-border bg-surface p-0.5"
+      >
+        {(
+          [
+            { k: 'chess' as const, label: 'チェス' },
+            { k: 'shogi' as const, label: '将棋' },
+          ] satisfies { k: GameKind; label: string }[]
+        ).map(({ k, label }) => (
+          <button
+            key={k}
+            type="button"
+            aria-pressed={kind === k}
+            onClick={() => switchKind(k)}
+            className={[
+              'focus-ai min-h-8 rounded px-2.5 text-xs font-medium transition-colors',
+              kind === k ? 'bg-ai text-white dark:bg-ai-dim' : 'text-muted hover:text-on-surface',
+            ].join(' ')}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      {!inGame ? (
-        // ═══ 設定画面 ═══
-        <SetupScreen
-          colorChoice={colorChoice}
-          difficulty={difficulty}
-          rated={ratedChoice}
-          myRating={myRating}
-          engineLoading={engineKind === 'loading'}
-          onColorChange={setColorChoice}
-          onDifficultyChange={setDifficulty}
-          onRatedChange={setRatedChoice}
-          onStart={() => startGame(colorChoice, difficulty, { rated: ratedChoice })}
-          onStartFromFen={(fen) => startGame(colorChoice, difficulty, { startFen: fen })}
-          history={history}
-          onReviewHistory={(pgn) => onReview(pgn)}
-          onDeleteHistory={(id) => setHistory(deletePlayedGame(id))}
-        />
-      ) : (
-        // ═══ 対局画面 ═══
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-          {/* 盤 + プレイヤープレート(上=相手 / 下=あなた)
+      {/* ── チェス経路（既存 JSX/ロジックを1挙動も変えない） ──
+          hidden で常時マウントし、将棋へ切り替えても進行中のチェス盤 DOM を破棄しない
+          （＝チェスの挙動・状態を完全維持）。 */}
+      <div className={kind === 'chess' ? '' : 'hidden'}>
+        {/* エンジン状態(常時表示。設定/対局どちらでも見える) */}
+        <div className="mb-5 flex flex-wrap items-center gap-2">
+          <span className="text-xs text-subtle">対局相手エンジン: {engineLabel}</span>
+        </div>
+
+        {!inGame ? (
+          // ═══ 設定画面 ═══
+          <SetupScreen
+            colorChoice={colorChoice}
+            difficulty={difficulty}
+            rated={ratedChoice}
+            myRating={myRating}
+            engineLoading={engineKind === 'loading'}
+            onColorChange={setColorChoice}
+            onDifficultyChange={setDifficulty}
+            onRatedChange={setRatedChoice}
+            onStart={() => startGame(colorChoice, difficulty, { rated: ratedChoice })}
+            onStartFromFen={(fen) => startGame(colorChoice, difficulty, { startFen: fen })}
+            history={history}
+            onReviewHistory={(pgn) => onReview({ kind: 'chess', text: pgn })}
+            onDeleteHistory={(id) =>
+              setHistory(deletePlayedGame(id).filter((g) => playedGameKind(g) === 'chess'))
+            }
+          />
+        ) : (
+          // ═══ 対局画面 ═══
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+            {/* 盤 + プレイヤープレート(上=相手 / 下=あなた)
               プレートには lichess 流の「取った駒の列 + マテリアル点差(+N)」を表示。
               点差はリードしている側にだけ +N を出す(0 や負は出さない=差だけが意味を持つ)。 */}
-          <section className="flex flex-col gap-4">
-            <div className="mx-auto w-full max-w-[500px]">
-              {youMat && oppMat && (
-                <PlayerPlate
-                  name={`${opponentName} ・目安${activeDifficultyRef.current.elo}`}
-                  captured={lostPieces(youMat.counts)} // 相手が取った駒 = あなたが失った駒
-                  capturedColor={youColor} // あなたの駒なのであなたの色のグリフ
-                  diff={oppMat.points - youMat.points}
-                  active={!isOver && snap.turn !== youColor}
+            <section className="flex flex-col gap-4">
+              <div className="mx-auto w-full max-w-[500px]">
+                {youMat && oppMat && (
+                  <PlayerPlate
+                    name={`${opponentName} ・目安${activeDifficultyRef.current.elo}`}
+                    captured={lostPieces(youMat.counts)} // 相手が取った駒 = あなたが失った駒
+                    capturedColor={youColor} // あなたの駒なのであなたの色のグリフ
+                    diff={oppMat.points - youMat.points}
+                    active={!isOver && snap.turn !== youColor}
+                  />
+                )}
+                <PlayBoard
+                  fen={snap.fen}
+                  orientation={orientation}
+                  turnColor={snap.turn}
+                  inCheck={snap.inCheck}
+                  lastMoveUci={snap.lastMoveUci}
+                  dests={snap.dests}
+                  movableColor={movableColor}
+                  isPromotion={isPromotion}
+                  onUserMove={handleUserMove}
                 />
-              )}
-              <PlayBoard
-                fen={snap.fen}
-                orientation={orientation}
-                turnColor={snap.turn}
-                inCheck={snap.inCheck}
-                lastMoveUci={snap.lastMoveUci}
-                dests={snap.dests}
-                movableColor={movableColor}
-                isPromotion={isPromotion}
-                onUserMove={handleUserMove}
-              />
-              {youMat && oppMat && (
-                <PlayerPlate
-                  // レート戦中はあなたのレートを併記(カジュアルはレート非表示=変動しないことの暗黙表現)
-                  name={activeRatedRef.current ? `あなた (${myRating.rating})` : 'あなた'}
-                  captured={lostPieces(oppMat.counts)} // あなたが取った駒 = 相手が失った駒
-                  capturedColor={oppColor}
-                  diff={youMat.points - oppMat.points}
-                  active={!isOver && snap.turn === youColor}
-                />
-              )}
-            </div>
-
-            {/* 手番/状態インジケータ */}
-            <div className="mx-auto flex w-full max-w-[500px] items-center justify-between gap-2">
-              <TurnIndicator
-                isOver={isOver}
-                aiThinking={aiThinking}
-                yourTurn={snap.turn === youColor}
-                youColor={youColor}
-              />
-              <button
-                type="button"
-                onClick={() => setOrientation((o) => (o === 'white' ? 'black' : 'white'))}
-                aria-label={`盤を反転（現在: ${orientation === 'white' ? '白目線' : '黒目線'}）`}
-                title="盤を反転"
-                className="focus-ai min-h-11 min-w-11 rounded-lg border border-border px-3 text-sm text-on-surface transition-colors hover:bg-surface-2"
-              >
-                ⇅
-              </button>
-            </div>
-
-            {/* AI 応答失敗の通知(無言フリーズ回避)。再試行で同じ局面をもう一度考えさせる。 */}
-            {aiError && !isOver && (
-              <div
-                role="alert"
-                className="mx-auto flex w-full max-w-[500px] items-center justify-between gap-2 rounded-lg border border-[var(--q-miss-fg)] bg-[var(--q-miss-bg)] px-3 py-2 text-xs text-[var(--q-miss-fg)]"
-              >
-                <span>AI の応答に失敗しました。もう一度試すか、投了/新規で続けられます。</span>
-                <button
-                  type="button"
-                  onClick={() => void runAiMove()}
-                  disabled={aiThinking}
-                  className="focus-ai min-h-9 shrink-0 rounded border border-[var(--q-miss-fg)] px-2 py-1 font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
-                >
-                  再試行
-                </button>
-              </div>
-            )}
-          </section>
-
-          {/* サイド: 結果/操作/棋譜 */}
-          <aside className="flex flex-col gap-4">
-            {/* 終局バナー */}
-            {isOver && snap.outcome.over && (
-              <ResultBanner
-                outcome={snap.outcome}
-                youColor={youColor}
-                ratingResult={ratingResult}
-                // 0手対局は振り返る棋譜が無い(ChessGame.fromPgn が読めない)ため導線を隠す
-                canReview={snap.moveCount > 0}
-                onReview={() => {
-                  const game = gameRef.current;
-                  if (game) onReview(game.pgn());
-                }}
-                onRematch={() => startGame(colorChoice, difficulty, { rated: ratedChoice })}
-                onNewGame={handleNewGame}
-              />
-            )}
-
-            {/* 対局中の操作 */}
-            {!isOver && (
-              <div className="flex flex-wrap gap-2 rounded-xl border border-border bg-surface-2 p-3 shadow-card">
-                <button
-                  type="button"
-                  onClick={handleTakeback}
-                  disabled={snap.history.length === 0 || aiThinking}
-                  className="focus-ai min-h-11 flex-1 rounded-lg border border-border px-3 text-sm text-on-surface transition-colors hover:bg-surface disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  待った
-                </button>
-                <button
-                  type="button"
-                  onClick={handleResign}
-                  className="focus-ai min-h-11 flex-1 rounded-lg border border-[var(--q-miss-fg)] px-3 text-sm font-medium text-[var(--q-miss-fg)] transition-colors hover:bg-[var(--q-miss-bg)]"
-                >
-                  投了
-                </button>
-                <button
-                  type="button"
-                  onClick={handleNewGame}
-                  className="focus-ai min-h-11 flex-1 rounded-lg border border-border px-3 text-sm text-muted transition-colors hover:bg-surface hover:text-on-surface"
-                >
-                  中断して新規
-                </button>
-                {/* レート戦で待ったを使うとレート変動なしに降格したことを明示(公平性の可視化)。
-                    ref を render で読むのは通常アンチパターンだが、待った操作は必ず setSnap を
-                    伴い再レンダーされるため、この表示は常に最新値を反映する(コメントで担保)。 */}
-                {activeRatedRef.current && usedTakebackRef.current && (
-                  <p className="w-full text-[10px] text-subtle" role="note">
-                    「待った」を使ったため、この対局はレート変動なしになりました
-                  </p>
+                {youMat && oppMat && (
+                  <PlayerPlate
+                    // レート戦中はあなたのレートを併記(カジュアルはレート非表示=変動しないことの暗黙表現)
+                    name={activeRatedRef.current ? `あなた (${myRating.rating})` : 'あなた'}
+                    captured={lostPieces(oppMat.counts)} // あなたが取った駒 = 相手が失った駒
+                    capturedColor={oppColor}
+                    diff={youMat.points - oppMat.points}
+                    active={!isOver && snap.turn === youColor}
+                  />
                 )}
               </div>
-            )}
 
-            {/* 棋譜(この対局の手順) */}
-            <PlayMoveList moves={snap.history} />
-          </aside>
+              {/* 手番/状態インジケータ */}
+              <div className="mx-auto flex w-full max-w-[500px] items-center justify-between gap-2">
+                <TurnIndicator
+                  isOver={isOver}
+                  aiThinking={aiThinking}
+                  yourTurn={snap.turn === youColor}
+                  youColor={youColor}
+                />
+                <button
+                  type="button"
+                  onClick={() => setOrientation((o) => (o === 'white' ? 'black' : 'white'))}
+                  aria-label={`盤を反転（現在: ${orientation === 'white' ? '白目線' : '黒目線'}）`}
+                  title="盤を反転"
+                  className="focus-ai min-h-11 min-w-11 rounded-lg border border-border px-3 text-sm text-on-surface transition-colors hover:bg-surface-2"
+                >
+                  ⇅
+                </button>
+              </div>
+
+              {/* AI 応答失敗の通知(無言フリーズ回避)。再試行で同じ局面をもう一度考えさせる。 */}
+              {aiError && !isOver && (
+                <div
+                  role="alert"
+                  className="mx-auto flex w-full max-w-[500px] items-center justify-between gap-2 rounded-lg border border-[var(--q-miss-fg)] bg-[var(--q-miss-bg)] px-3 py-2 text-xs text-[var(--q-miss-fg)]"
+                >
+                  <span>AI の応答に失敗しました。もう一度試すか、投了/新規で続けられます。</span>
+                  <button
+                    type="button"
+                    onClick={() => void runAiMove()}
+                    disabled={aiThinking}
+                    className="focus-ai min-h-9 shrink-0 rounded border border-[var(--q-miss-fg)] px-2 py-1 font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
+                  >
+                    再試行
+                  </button>
+                </div>
+              )}
+            </section>
+
+            {/* サイド: 結果/操作/棋譜 */}
+            <aside className="flex flex-col gap-4">
+              {/* 終局バナー */}
+              {isOver && snap.outcome.over && (
+                <ResultBanner
+                  outcome={snap.outcome}
+                  youColor={youColor}
+                  ratingResult={ratingResult}
+                  // 0手対局は振り返る棋譜が無い(ChessGame.fromPgn が読めない)ため導線を隠す
+                  canReview={snap.moveCount > 0}
+                  onReview={() => {
+                    const game = gameRef.current;
+                    if (game) onReview({ kind: 'chess', text: game.pgn() });
+                  }}
+                  onRematch={() => startGame(colorChoice, difficulty, { rated: ratedChoice })}
+                  onNewGame={handleNewGame}
+                />
+              )}
+
+              {/* 対局中の操作 */}
+              {!isOver && (
+                <div className="flex flex-wrap gap-2 rounded-xl border border-border bg-surface-2 p-3 shadow-card">
+                  <button
+                    type="button"
+                    onClick={handleTakeback}
+                    disabled={snap.history.length === 0 || aiThinking}
+                    className="focus-ai min-h-11 flex-1 rounded-lg border border-border px-3 text-sm text-on-surface transition-colors hover:bg-surface disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    待った
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResign}
+                    className="focus-ai min-h-11 flex-1 rounded-lg border border-[var(--q-miss-fg)] px-3 text-sm font-medium text-[var(--q-miss-fg)] transition-colors hover:bg-[var(--q-miss-bg)]"
+                  >
+                    投了
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleNewGame}
+                    className="focus-ai min-h-11 flex-1 rounded-lg border border-border px-3 text-sm text-muted transition-colors hover:bg-surface hover:text-on-surface"
+                  >
+                    中断して新規
+                  </button>
+                  {/* レート戦で待ったを使うとレート変動なしに降格したことを明示(公平性の可視化)。
+                    ref を render で読むのは通常アンチパターンだが、待った操作は必ず setSnap を
+                    伴い再レンダーされるため、この表示は常に最新値を反映する(コメントで担保)。 */}
+                  {activeRatedRef.current && usedTakebackRef.current && (
+                    <p className="w-full text-[10px] text-subtle" role="note">
+                      「待った」を使ったため、この対局はレート変動なしになりました
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* 棋譜(この対局の手順) */}
+              <PlayMoveList moves={snap.history} />
+            </aside>
+          </div>
+        )}
+      </div>
+
+      {/* ── 将棋対局セッション（lazy・1バイト不変条件） ──
+          初回に将棋タブを選んだときだけ mount し、以降 hidden で保持（進行中の対局を失わない）。
+          Suspense fallback はチャンク読込中のプレースホルダ。onReview は kind 対応で受け渡す。 */}
+      {shogiMounted && (
+        <div className={kind === 'shogi' ? '' : 'hidden'}>
+          <Suspense
+            fallback={
+              <div
+                className="h-96 w-full animate-pulse rounded-xl bg-surface-2"
+                aria-hidden="true"
+              />
+            }
+          >
+            <ShogiPlaySession onReview={onReview} />
+          </Suspense>
         </div>
       )}
     </div>
