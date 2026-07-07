@@ -1,0 +1,35 @@
+#!/usr/bin/env sh
+# ============================================================================
+# pre-commit: gitleaks によるローカル秘密スキャン（commit を物理的に止める前倒し防壁）
+#
+# WHY（2026-06-30・オーナーの「APIキー流出が怖い」懸念への二重ネット / 再発防止）:
+#   GitHub の push protection はサーバー側で push を止めてくれるが穴がある:
+#     (1) 既知プロバイダ形状しか捕まえない → xAI(Grok) `xai-…` 等パートナー未参加プロバイダを取りこぼす恐れ
+#     (2) push するまで気づけない（ローカルの履歴には既に秘密が刻まれる）
+#   このフックは“自分のPCで commit する瞬間”に staged 差分を gitleaks でスキャンし、
+#   秘密を見つけたら commit 自体を中止する。汎用の高エントロピー検出も効くので push protection の穴を塞ぐ。
+#   サーバー側(push protection) と二重化＝どちらかが見逃しても止まる設計。
+#   関連: docs/COST_DEFENSE.md（秘密の置き場所）/ docs/PLAN.md（gitleaks 導入予定として記載済み）。
+#
+# 設計判断（なぜこの形か）:
+#   - gitleaks 未導入なら “警告して通す”（block しない）。理由: README の「clone すれば動く」を壊さない＆
+#     push protection が後段で必ず受けるため。ローカル層はあくまで前倒しのボーナス。導入は強く促す。
+#   - `--staged` で「これから commit される差分」だけを対象にする（全履歴走査より高速・pre-commit 向け）。
+#   - `--redact` で万一の検出時もログに生の秘密を出さない（フック出力経由の二次漏洩を防ぐ）。
+# ============================================================================
+
+# gitleaks が無ければ警告のみ（fail-open）。push protection が後段の保険なので commit はブロックしない。
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "⚠️  gitleaks 未導入のためローカル秘密スキャンをスキップしました。"
+  echo "    強く推奨: brew install gitleaks （GitHub の push protection は引き続き有効です）"
+  exit 0
+fi
+
+# staged 差分をスキャン。秘密を検出したら gitleaks は非0終了 → commit を中止する。
+if ! gitleaks git --staged --redact -v; then
+  echo ""
+  echo "🚫 gitleaks が staged 差分に秘密の疑いを検出したため commit を中止しました。"
+  echo "   ・誤検知なら該当行を直すか、本当に安全な場合のみ .gitleaks.toml の allowlist で除外。"
+  echo "   ・秘密は .env（gitignore 済み）か Supabase secrets に置くこと。コードに直書きしない。"
+  exit 1
+fi

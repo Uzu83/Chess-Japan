@@ -1,0 +1,18 @@
+{
+  "name": "Chess-Japan — 棋譜AI解説",
+  "short_name": "Chess-Japan",
+  "description": "チェス・将棋の棋譜をAIが1手ずつ解説する無料Webツール。Stockfish の評価値 × LLM で日本語解説。",
+  "lang": "ja",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f3ea",
+  "theme_color": "#3b5ea6",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <!--
+    Chess-Japan OG ブランドカード
+    サイズ: 1200×630 (SNS シェア標準)
+    カラーパレット: washi(和紙)#f7f3ea / sumi(墨)#2c2622 / ai-iro(藍)#3b5ea6 / muted #706860
+    フォント: システムスタック（外部フォント非読み込み、COEP 方針と一貫）
+
+    NOTE: Facebook / Twitter(X) は SVG の og:image を非対応。
+    このファイルを 1200×630 PNG に変換して public/og.png として配置し、
+    index.html の og:image / twitter:image を /og.png へ差し替えることを強く推奨。
+    変換例: npx sharp-cli convert public/og.svg -o public/og.png
+           または Figma / Squoosh / ImageMagick で手動変換。
+  -->
+
+  <!-- 背景: 和紙(washi) -->
+  <rect width="1200" height="630" fill="#f7f3ea"/>
+
+  <!-- 左アクセントバー: 藍(ai-iro) — ブランドの「一点差し色」を体現 -->
+  <rect x="0" y="0" width="10" height="630" fill="#3b5ea6"/>
+
+  <!-- 底面バー: 藍 — URL 表示エリア -->
+  <rect x="0" y="592" width="1200" height="38" fill="#3b5ea6"/>
+
+  <!-- 装飾: チェス駒ウォーターマーク — 右下に薄く。存在感を出しつつ文字を邪魔しない -->
+  <text
+    x="1010" y="540"
+    font-size="360"
+    font-family="serif, 'Apple Color Emoji', 'Segoe UI Emoji'"
+    text-anchor="middle"
+    fill="#2c2622"
+    opacity="0.055"
+  >♟</text>
+
+  <!-- アプリ名: Chess-Japan — 藍、大きめ、left-aligned -->
+  <text
+    x="90" y="188"
+    font-size="90"
+    font-family="'Helvetica Neue', Arial, 'Hiragino Sans', 'Yu Gothic', sans-serif"
+    font-weight="700"
+    fill="#3b5ea6"
+    letter-spacing="-1"
+  >Chess-Japan</text>
+
+  <!-- 名称下のアクセントライン -->
+  <rect x="90" y="208" width="200" height="3" rx="1.5" fill="#3b5ea6"/>
+
+  <!-- メインキャッチ: 日本語タグライン 1行目 -->
+  <text
+    x="90" y="305"
+    font-size="52"
+    font-family="'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Meiryo', sans-serif"
+    font-weight="600"
+    fill="#2c2622"
+  >チェス・将棋の棋譜を</text>
+
+  <!-- メインキャッチ: 日本語タグライン 2行目 -->
+  <text
+    x="90" y="372"
+    font-size="52"
+    font-family="'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Meiryo', sans-serif"
+    font-weight="600"
+    fill="#2c2622"
+  >AIが1手ずつ解説</text>
+
+  <!-- サブテキスト: 機能説明 -->
+  <text
+    x="90" y="453"
+    font-size="28"
+    font-family="'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Meiryo', sans-serif"
+    fill="#706860"
+  >Stockfish × LLM ｜ 評価値・最善手・悪手の理由を無料で確認</text>
+
+  <!-- 底面 URL: washi 色 -->
+  <text
+    x="90" y="621"
+    font-size="20"
+    font-family="'Helvetica Neue', Arial, monospace"
+    font-weight="500"
+    fill="#f7f3ea"
+    opacity="0.92"
+  >chess-japan.pages.dev</text>
+</svg>
