@@ -64,6 +64,14 @@ begin
     raise exception 'not authenticated';
   end if;
 
+  -- p_source の NULL 拒否 (Codex ゲート②blocking #1)。
+  -- WHY 明示チェックが要るか: 0004 の check 制約 `rating_source in (...)` は SQL の
+  -- 三値論理で `NULL in (...)` が NULL(=非FALSE)に評価されるため NULL を素通しする。
+  -- REST 直叩きで p_source=null を送ると whitelist を迂回できてしまう。
+  if p_source is null then
+    raise exception 'invalid source';
+  end if;
+
   update public.profiles
      set rating = greatest(100, least(3000, p_rating)), -- サーバークランプ (改竄値対策)
          rating_source = p_source,  -- whitelist は 0004 の check 制約が強制
@@ -78,9 +86,12 @@ begin
     if not found then
       -- トリガ失敗等で行が無い異常系。client 直 INSERT は許さないので、ここで
       -- 自己修復として行を作る (SECURITY DEFINER なので可能)。
+      -- on conflict do nothing: 複数タブ同時リトライで後着が 23505 で 500 になる
+      -- のを防ぐ (監査ワークフロー指摘)。負けた側は下の再 SELECT で行を拾う。
       insert into public.profiles (id, rating, rating_source, rating_initialized)
       values (auth.uid(), greatest(100, least(3000, p_rating)), p_source, true)
-      returning * into v_row;
+      on conflict (id) do nothing;
+      select * into v_row from public.profiles where id = auth.uid();
     end if;
   end if;
 
@@ -126,8 +137,19 @@ begin
     raise exception 'no profile';
   end if;
 
+  -- 初期化前のレート操作を拒否 (Codex ゲート②blocking #2)。
+  -- WHY: これが無いと「未初期化のまま rated 結果を積む → その後 set_initial_rating で
+  -- 絶対値を上書き」という順序倒錯が REST 直叩きで可能になる。
+  if not v_row.rating_initialized then
+    raise exception 'rating not initialized';
+  end if;
+
+  -- 丸めは floor(x + 0.5) = JS の Math.round と同方向 (half-toward-+infinity)。
+  -- WHY 素の round() を使わないか: PostgreSQL の round(numeric) は half-away-from-zero
+  -- で、負の -X.5 ちょうどのとき JS と 1 ずれる。整数 Elo 入力では実際には発生しない
+  -- ことを数値検証済みだが、形式的パリティを構造で保証しておく (監査ワークフロー指摘)。
   v_e := 1.0 / (1.0 + power(10.0, (v_opp - v_row.rating) / 400.0));
-  v_delta := round(32 * (p_score - v_e));
+  v_delta := floor(32 * (p_score - v_e) + 0.5)::integer;
 
   -- floor/ceiling クランプ (0004 check と同値。check 違反例外でなくクランプで返す)。
   update public.profiles
@@ -141,12 +163,20 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 実行権限: authenticated が「自分の行に対して」呼ぶ RPC。
--- service_role 限定の rate_check (0003) とは役割が違う (あちらはコスト防衛)。
--- public/anon からは剥奪。handle_new_user はトリガ専用なので全ロールから剥奪。
+-- 実行権限。
+-- handle_new_user はトリガ専用なので全ロールから剥奪。
+-- set_initial_rating は authenticated が自分の行に対して呼ぶ (オンボーディング)。
+--
+-- 【apply_rated_result は 2C-1 では誰にも GRANT しない — 意図的】
+-- 監査ワークフロー指摘 (medium): authenticated に GRANT すると、UI 未配線でも
+-- REST 直叩き (/rest/v1/rpc/apply_rated_result) の無制限リプレイで ~57 回の
+-- 「対2800勝利」を積んでレート 3000 に到達できる。2C-1 はそもそも client から
+-- 呼ばないので、関数定義だけ先行させ GRANT は配線する 2C-2 で行う。
+-- 2C-2 で再 GRANT する際の必須条件 (Codex ゲートで再審査すること):
+--   - rate_check (0003) 等による呼び出し回数の上限、または
+--   - サーバー主導の game_id 発行 + 冪等キー検証
 -- ---------------------------------------------------------------------------
 revoke all on function public.handle_new_user() from public, anon, authenticated;
 revoke all on function public.set_initial_rating(integer, text) from public, anon;
-revoke all on function public.apply_rated_result(integer, numeric) from public, anon;
+revoke all on function public.apply_rated_result(integer, numeric) from public, anon, authenticated;
 grant execute on function public.set_initial_rating(integer, text) to authenticated;
-grant execute on function public.apply_rated_result(integer, numeric) to authenticated;

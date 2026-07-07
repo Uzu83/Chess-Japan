@@ -87,8 +87,12 @@ comment on table public.profiles is
   'explain_cache/rate_counters の全面ロック方針とは意図的に別 (COST_DEFENSE.md 参照)。';
 
 -- updated_at の自動タッチ。client に updated_at の GRANT が無いのはこのため。
+-- set search_path: advisor lint (function_search_path_mutable) 対応。SECURITY DEFINER
+-- ではないので実害は小さいが、0003/0005 の他関数と流儀を揃える。
 create or replace function public.touch_updated_at() returns trigger
-language plpgsql as $$
+language plpgsql
+set search_path = public
+as $$
 begin
   new.updated_at = now();
   return new;

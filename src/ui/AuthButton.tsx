@@ -65,6 +65,17 @@ export function AuthButton() {
         )}
       </button>
 
+      {/* 外クリックで閉じる透明バックドロップ(監査ワークフロー指摘)。
+          メニューより下(z-30 < z-40)に敷き、画面のどこを触っても閉じる。 */}
+      {menuOpen && (
+        <button
+          type="button"
+          aria-hidden="true"
+          tabIndex={-1}
+          onClick={() => setMenuOpen(false)}
+          className="fixed inset-0 z-30 cursor-default"
+        />
+      )}
       {menuOpen && (
         <div
           role="menu"

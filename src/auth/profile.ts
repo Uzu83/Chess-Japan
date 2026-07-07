@@ -78,6 +78,11 @@ export async function applyRatedResult(oppElo: number, score: 0 | 0.5 | 1): Prom
 export async function updateDisplayName(name: string): Promise<void> {
   const supabase = await getSupabase();
   // セッションからローカルに user id を取る(getUser() と違いネットワークを叩かない)。
+  // 【境界の明確化 — 監査ワークフロー指摘への回答】この uid は「絞り込みの意図表明」
+  // であり認可の根拠ではない。認可は常にサーバー側 RLS の auth.uid()(署名済み JWT 由来)。
+  // localStorage を改竄して他人の uid を入れても WHERE id=改竄値 AND auth.uid()=本人 が
+  // 0 行になり何も起きない。**認可判断を client の identity に依存させる箇所では
+  // getSession() でなく getUser()(サーバー検証)を使うこと** — が今後のガイドライン。
   const { data: sessionData } = await supabase.auth.getSession();
   const uid = sessionData.session?.user.id;
   if (!uid) throw new Error('未ログインです');

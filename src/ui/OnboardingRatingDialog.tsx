@@ -14,7 +14,7 @@
  * chess.com(≈800始まり)と lichess(≈1500始まり)のスケール差は補足文のみで
  * 換算はしない(必要十分 — 内部レートは対AI戦の飾りで厳密性より摩擦の低さ優先)。
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { decideMigrationOffer } from '../auth/localMigration';
 import type { RatingSource } from '../auth/profile';
 import { loadRating } from '../core/storage';
@@ -38,8 +38,14 @@ export function OnboardingRatingDialog({ onSubmit }: Props) {
   const [custom, setCustom] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 二重送信の同期ガード(監査ワークフロー指摘)。busy(state)は再レンダーまで
+  // 反映されないため、素早い連打では disabled が間に合わない窓がある。
+  // ref は同期更新なので2発目を確実に弾ける(サーバー側も冪等だが多層で)。
+  const submittingRef = useRef(false);
 
   const submit = async (rating: number, source: RatingSource) => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -48,6 +54,7 @@ export function OnboardingRatingDialog({ onSubmit }: Props) {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
+      submittingRef.current = false;
     }
   };
 
@@ -88,8 +95,11 @@ export function OnboardingRatingDialog({ onSubmit }: Props) {
             <span className="block text-sm font-semibold">
               この端末のレート {offer.localRating} を引き継ぐ
             </span>
+            {/* 文言は正直に(Codex ゲート②指摘): 引き継ぐのはレート値のみで、
+                クラウド側の対局数は 0 から始まる。「N局の結果を反映」だと
+                対局数も移る誤解を生むため「N局で到達した」に留める。 */}
             <span className="block text-xs opacity-80">
-              これまでのレート戦 {offer.games} 局の結果を反映
+              これまでのレート戦 {offer.games} 局で到達した値です
             </span>
           </button>
         )}
