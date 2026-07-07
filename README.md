@@ -58,6 +58,8 @@ npm run build      # 本番ビルド
 
 `.env.example` をコピーして `.env` を作成。`VITE_` 付きはブラウザに露出するため秘密情報を入れないこと。
 LLM のキーは Supabase の secrets にのみ設定する（`docs/` 参照）。
+`VITE_SENTRY_DSN`（エラー監視、公開値）は任意 — 未設定なら Sentry は完全オフ。設定する場合は
+Sentry 側で Allowed Domains を必ず絞ること（`.env.example` の運用メモ参照）。
 
 ### WASM マルチスレッドの確認
 

@@ -176,7 +176,9 @@ function App() {
       {/* ── フッター ── */}
       <footer className="border-t border-border px-5 py-3">
         <div className="mx-auto flex max-w-6xl items-center justify-between">
-          {/* GPLv3 クレジット — プロジェクトの公開表記ポリシーに従い残す */}
+          {/* GPLv3 クレジット — プロジェクトの公開表記ポリシーに従い残す。
+              プライバシーポリシーは静的 HTML(public/privacy.html)への通常リンク。
+              WHY 同タブ遷移: SPA 外の独立ページで「← 戻る」リンクを持つため target=_blank 不要。 */}
           <p className="text-xs text-subtle">
             Stockfish・chessground:{' '}
             <a
@@ -186,6 +188,12 @@ function App() {
               className="focus-ai underline-offset-2 hover:underline"
             >
               GPLv3
+            </a>
+            <span aria-hidden="true" className="mx-2 select-none">
+              ·
+            </span>
+            <a href="/privacy.html" className="focus-ai underline-offset-2 hover:underline">
+              プライバシー
             </a>
           </p>
 
