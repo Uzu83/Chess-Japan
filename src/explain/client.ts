@@ -91,6 +91,17 @@ export function localExplanation(req: ExplainRequest): string {
 /** Edge Function を呼んで解説/応答テキストを得る。未設定ならローカル簡易解説。 */
 export async function requestExplanation(req: ExplainRequest): Promise<string> {
   if (!isBackendConfigured()) {
+    // 将棋の局所解説は USI→日本語変換に tsshogi を要する。チェス利用者のメインバンドルに
+    // tsshogi を漏らさないため、将棋分岐だけ **動的 import** で shogiNotation を読み込む
+    // （chess の localExplanation は同期のまま・既存テストに影響なし）。
+    if (req.game === 'shogi') {
+      const { localShogiExplanation } = await import('../core/shogiNotation');
+      return localShogiExplanation({
+        context: req.context,
+        mode: req.mode,
+        question: req.question,
+      });
+    }
     return localExplanation(req);
   }
   const headers: Record<string, string> = {

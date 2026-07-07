@@ -1,10 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChessGame } from '../core/game';
+import { chessGameModel, gameMoveRecords, type GameModel } from '../core/gameModel';
 import { buildExplanationContext } from '../core/classify';
 import { computeAccuracySummary } from '../core/evalUtils';
-import type { ExplanationContext, KnowledgeProfile, MoveQuality } from '../core/types';
+import type { ExplanationContext, GameKind, KnowledgeProfile, MoveQuality } from '../core/types';
 import type { ChessEngine } from '../engine/types';
-import { createEngine, type EngineKind } from '../engine/factory';
+import {
+  createEngine,
+  createShogiEngine,
+  type EngineKind,
+  type ShogiEngineKind,
+} from '../engine/factory';
 import { requestExplanation } from '../explain/client';
 import {
   hashPgn,
@@ -16,6 +22,37 @@ import {
   decodePgnFromUrl,
 } from '../core/storage';
 import { Board } from './Board';
+
+/*
+ * ShogiBoard は将棋タブを開いたときだけ読み込む（React.lazy で code-split）。
+ * WHY: shogiground/tsshogi/やねうら王 をチェス利用者のメインバンドルに 1 バイトも載せない不変条件。
+ *   static import すると shogiground がメインチャンクに漏れるため、必ず動的 import 経由にする。
+ */
+const ShogiBoard = lazy(() => import('./ShogiBoard').then((m) => ({ default: m.ShogiBoard })));
+
+/** 盤の既定局面（棋譜ロード前の空表示用）。chess=FEN / shogi=SFEN。 */
+const DEFAULT_CHESS_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+const DEFAULT_SHOGI_SFEN = 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1';
+
+/*
+ * 将棋モードのサンプル棋譜（KIF）。チェスの SAMPLE_PGN と同じく「初回に空画面で迎えない」ため。
+ * 角換わりの出だし4手（Phase 4-0 スパイクで tsshogi パース PASS を確認した局面系）。
+ */
+const SAMPLE_KIF = [
+  '手合割：平手',
+  '先手：先手',
+  '後手：後手',
+  '手数----指手---------消費時間--',
+  '   1 ７六歩(77)',
+  '   2 ３四歩(33)',
+  '   3 ２二角成(88)',
+  '   4 同銀(31)',
+].join('\n');
+
+/** crossOriginIsolated（=SharedArrayBuffer 有効）か。Safari(credentialless 非対応)では false。 */
+const COI_ENABLED = typeof window !== 'undefined' && window.crossOriginIsolated === true;
+/** テスト/開発でモックエンジンを明示選択しているか。 */
+const MOCK_ENGINE_ENV = (import.meta.env.VITE_ENGINE as string | undefined) === 'mock';
 import { EvalBar } from './EvalBar';
 import { EvalGraph } from './EvalGraph';
 import { MoveList } from './MoveList';
@@ -97,12 +134,24 @@ export function ReviewView({
   onPlayFrom?: (fen: string) => void;
 } = {}) {
   const [pgnText, setPgnText] = useState(initialPgn ?? SAMPLE_PGN);
-  const [game, setGame] = useState<ChessGame | null>(null);
+  // model は GameModel（chess/shogi 共通の薄い読み取り面）。UI・解析ループはこれ経由で動く。
+  const [model, setModel] = useState<GameModel | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
-  const [engineKind, setEngineKind] = useState<EngineKind | 'loading'>('loading');
+  // engineKind は chess(stockfish/mock) と shogi(yaneuraou/mock) と特別状態(loading/unsupported)の合併。
+  const [engineKind, setEngineKind] = useState<
+    EngineKind | ShogiEngineKind | 'loading' | 'unsupported'
+  >('loading');
   const [busy, setBusy] = useState(false);
   const [orientation, setOrientation] = useState<'white' | 'black'>('white');
+
+  // ── 将棋モード関連 ──────────────────────────────────────────
+  // kind: 現在のゲーム種別（既定 chess＝チェス利用者の体験を一切変えない）。
+  const [kind, setKind] = useState<GameKind>('chess');
+  // 将棋の棋譜入力（KIF/CSA/SFEN 等）。チェスの pgnText と分離して chess 経路を汚さない。
+  const [shogiText, setShogiText] = useState(SAMPLE_KIF);
+  // 将棋棋譜パース中フラグ（tsshogi の動的 import 待ち）。
+  const [shogiLoading, setShogiLoading] = useState(false);
 
   const [contexts, setContexts] = useState<Record<number, ExplanationContext>>({});
   const [explanations, setExplanations] = useState<Record<number, string>>({});
@@ -148,23 +197,40 @@ export function ReviewView({
   // onExplain の最新版を ref に保持(onExplain 自体はレンダーごとに再生成される)
   const onExplainRef = useRef<(() => Promise<void>) | null>(null);
 
-  // ── エンジン初期化 ──────────────────────────────────────────
+  // ── エンジン初期化（kind に追従） ──────────────────────────────
+  // WHY kind 依存にするか:
+  //   チェスは Stockfish、将棋はやねうら王(WASM)と別エンジン。タブ(kind)を切り替えたら
+  //   対応するエンジンへ差し替える。エンジンは 1 種だけ生かして worker を無駄に増やさない。
+  //
+  // WHY 将棋 + coi 無効を特別扱いするか（Codex ゲート① (b)・Safari 非対称の許容）:
+  //   やねうら王は SharedArrayBuffer 必須で、credentialless 非対応の Safari では動かない。
+  //   その環境ではエンジンを起動せず 'unsupported' にして「盤の閲覧のみ可」に倒す（解析なしでも
+  //   盤ナビゲーションは動く）。チェスは lite-single で SAB 不要なので Safari でも従来どおり動く。
   useEffect(() => {
     let disposed = false;
-    createEngine().then(({ engine, kind }) => {
+
+    if (kind === 'shogi' && !COI_ENABLED && !MOCK_ENGINE_ENV) {
+      // 将棋エンジン非対応環境（Safari 等）。解析は諦め、盤閲覧・ナビだけ提供する。
+      setEngineKind('unsupported');
+      return;
+    }
+
+    setEngineKind('loading');
+    const create = kind === 'shogi' ? createShogiEngine() : createEngine();
+    create.then(({ engine, kind: ek }) => {
       if (disposed) {
         engine.dispose();
         return;
       }
       engineRef.current = engine;
-      setEngineKind(kind);
+      setEngineKind(ek);
     });
     return () => {
       disposed = true;
       engineRef.current?.dispose();
       engineRef.current = null;
     };
-  }, []);
+  }, [kind]);
 
   // アンマウント時に全手解析をキャンセルする専用 cleanup。
   // WHY 分離: エンジン cleanup と混在させると react-hooks/exhaustive-deps が
@@ -200,7 +266,8 @@ export function ReviewView({
           savedCtx = loadContextsFromStorage(hashPgn(pgn));
         }
 
-        setGame(g);
+        // ChessGame を GameModel に薄く包む（chessGameModel）。ChessGame 本体は無改修。
+        setModel(chessGameModel(g));
         setIndex(0);
         setContexts(savedCtx ?? {});
         setExplanations({});
@@ -214,12 +281,90 @@ export function ReviewView({
         ++analyzeToken.current;
       } catch (e) {
         setError(`PGN を読み込めませんでした: ${(e as Error).message}`);
-        setGame(null);
+        setModel(null);
         setLoadedPgn(null);
       }
     },
     [], // useState setters は安定 → deps 不要
   );
+
+  // ── 将棋棋譜ロード ──────────────────────────────────────────
+  /*
+   * loadShogi — KIF/CSA/SFEN 等の文字列から将棋 GameModel を構築する。
+   *
+   * WHY 動的 import か（1バイト不変条件）:
+   *   tsshogi は shogiGame.ts 経由でのみ読み込む。ここで `await import` することで、将棋棋譜を
+   *   実際に読み込むまで tsshogi をチェス利用者に払わせない。
+   *
+   * WHY loadedPgn を null にするか（chess セッション/キャッシュの汚染防止）:
+   *   セッション/コンテキスト永続化は loadedPgn（chess の PGN）をキーにしている。将棋の KIF を
+   *   そこへ入れると、次回起動で chess として復元しようとして壊れる。MVP では将棋は永続化せず
+   *   （再解析は許容）、loadedPgn=null にして両永続化 effect を確実にスキップさせる。
+   */
+  /*
+   * ロード世代ガード(Codex ゲート②blocking #1):
+   *   loadShogi は動的 import を await する間にユーザーがチェスへ戻れる。ガード無しだと
+   *   「kind==='chess' なのに model.kind==='shogi'」が着弾し、チェス盤に SFEN が渡る・
+   *   保存/共有/解説の状態が食い違う、という不整合が起きる。世代番号(seq)と現在 kind
+   *   (kindRef)の両方を commit 直前に検査し、古いロード・対象外 kind の結果は黙って捨てる。
+   */
+  const shogiLoadSeqRef = useRef(0);
+  const kindRef = useRef<GameKind>('chess'); // setKind と同時に手動更新(await 越しに最新 kind を読む)
+
+  const loadShogi = useCallback(async (text: string) => {
+    const seq = ++shogiLoadSeqRef.current;
+    setShogiLoading(true);
+    try {
+      const { shogiGameModel } = await import('../core/shogiGame');
+      const m = shogiGameModel(text);
+      // race ガード: このロードが最新で、かつ今も将棋モードのときだけ commit する
+      if (seq !== shogiLoadSeqRef.current || kindRef.current !== 'shogi') return;
+      setModel(m);
+      setIndex(0);
+      setContexts({});
+      setExplanations({});
+      setThreads({});
+      setError(null);
+      setLoadedPgn(null); // 将棋は永続化しない（chess の復元を汚さない）
+      ++bulkTokenRef.current;
+      setAnalyzeAllProgress(null);
+      ++analyzeToken.current;
+    } catch (e) {
+      if (seq !== shogiLoadSeqRef.current || kindRef.current !== 'shogi') return;
+      setError(`将棋の棋譜を読み込めませんでした: ${(e as Error).message}`);
+      setModel(null);
+      setLoadedPgn(null);
+    } finally {
+      // ローディング表示は「最新のロード」だけが畳む(古いロードが新しい表示を消さない)
+      if (seq === shogiLoadSeqRef.current) setShogiLoading(false);
+    }
+  }, []);
+
+  // ── チェス/将棋 切替 ────────────────────────────────────────
+  // 切替時に対応する棋譜を読み直す（チェスは pgnText、将棋は shogiText）。
+  // WHY 明示トグルにするか（自動判別を採らない理由）:
+  //   ①チェス利用者が誤って tsshogi を読み込む経路を作らない（1バイト不変条件を UI からも守る）
+  //   ②KIF/PGN の自動判別は誤検出の余地があり、貼り付けたのに別ゲームで開く事故を避けられる。
+  const switchKind = useCallback(
+    (k: GameKind) => {
+      if (k === kind) return;
+      kindRef.current = k; // loadShogi の race ガードが await 越しに読む(state 更新は非同期のため)
+      setKind(k);
+      setIndex(0);
+      if (k === 'shogi') {
+        void loadShogi(shogiText);
+      } else {
+        loadPgn(pgnText, { restoreCtx: true });
+      }
+    },
+    [kind, shogiText, pgnText, loadShogi, loadPgn],
+  );
+
+  // ── GameModel → MoveRecord[] 派生 ───────────────────────────
+  // 既存 UI(MoveList/EvalGraph/computeAccuracySummary)と解析ループは MoveRecord[] を前提にしている。
+  // GameModel から機械的に再構築する（gameMoveRecords）。チェスでは ChessGame.moves と完全一致するため
+  // 既存挙動は不変（gameModel.ts の同値性コメント参照）。将棋は SFEN/USI/日本語ラベルがここに載る。
+  const moveRecords = useMemo(() => (model ? gameMoveRecords(model) : []), [model]);
 
   // ── 起動時の初期ロード ──────────────────────────────────────
   /*
@@ -297,12 +442,13 @@ export function ReviewView({
   // ── 単手解析(ナビゲートするたびに現在手を解析) ───────────────
   useEffect(() => {
     const engine = engineRef.current;
-    if (!engine || !game || index < 1) return;
+    if (!engine || !model || index < 1) return;
     const ply = index - 1;
     if (contexts[ply]) return; // 既にキャッシュ済み
 
     const token = ++analyzeToken.current;
-    const move = game.moves[ply];
+    const move = moveRecords[ply];
+    if (!move) return;
     (async () => {
       const before = await engine.analyze(move.fenBefore, { multipv: 3, depth: 12 });
       const after = await engine.analyze(move.fenAfter, { multipv: 1, depth: 12 });
@@ -316,10 +462,11 @@ export function ReviewView({
         bestMove: before.bestMove ?? best.moves[0],
         pv: best.moves,
         scoreAfter: after.lines[0]?.score ?? { type: 'cp', value: 0 },
+        kind: model.kind, // 手の質分類の閾値を chess/shogi で切替
       });
       setContexts((prev) => ({ ...prev, [ply]: ctx }));
     })();
-  }, [index, game, contexts]);
+  }, [index, model, moveRecords, contexts]);
 
   // ── 全手解析 ─────────────────────────────────────────────────
   /*
@@ -336,12 +483,12 @@ export function ReviewView({
    */
   const handleAnalyzeAll = useCallback(async () => {
     const engine = engineRef.current;
-    if (!game || !engine || isAnalyzingAllRef.current) return;
+    if (!model || !engine || isAnalyzingAllRef.current) return;
 
     isAnalyzingAllRef.current = true;
     // 自分のトークンを取得(以降 bulkTokenRef が変われば中断)
     const myToken = ++bulkTokenRef.current;
-    const total = game.length;
+    const total = moveRecords.length;
     setAnalyzeAllProgress({ done: 0, total });
 
     let done = 0;
@@ -349,7 +496,7 @@ export function ReviewView({
       // キャンセルチェック
       if (bulkTokenRef.current !== myToken) break;
 
-      const move = game.moves[ply];
+      const move = moveRecords[ply];
       const currentEngine = engineRef.current;
       if (!currentEngine) break;
 
@@ -372,6 +519,7 @@ export function ReviewView({
             bestMove: before.bestMove ?? best.moves[0],
             pv: best.moves,
             scoreAfter: after.lines[0]?.score ?? { type: 'cp', value: 0 },
+            kind: model.kind, // 手の質分類の閾値を chess/shogi で切替
           });
           // 既に別手段で解析済みの場合は上書きしない
           setContexts((prev) => (ply in prev ? prev : { ...prev, [ply]: ctx }));
@@ -394,7 +542,7 @@ export function ReviewView({
     if (bulkTokenRef.current === myToken) {
       setAnalyzeAllProgress(null);
     }
-  }, [game]); // game のみ。engine は ref 経由、setContexts は安定した setter
+  }, [model, moveRecords]); // model/moveRecords。engine は ref 経由、setContexts は安定した setter
 
   // ── キーボードナビゲーション ─────────────────────────────────
   /*
@@ -405,7 +553,8 @@ export function ReviewView({
   useEffect(() => {
     // active=false(非表示=対局タブ表示中)ではリスナーを張らない。
     // → 対局中に Home/End/矢印を裏の ReviewView が横取りする回帰を防ぐ。
-    if (!game || !active) return;
+    if (!model || !active) return;
+    const total = moveRecords.length;
     const handler = (e: KeyboardEvent) => {
       // テキスト入力中は無視
       const target = e.target as HTMLElement;
@@ -418,7 +567,7 @@ export function ReviewView({
           e.preventDefault();
           break;
         case 'ArrowRight':
-          setIndex((i) => Math.min(game.length, i + 1));
+          setIndex((i) => Math.min(total, i + 1));
           e.preventDefault();
           break;
         case 'Home':
@@ -426,7 +575,7 @@ export function ReviewView({
           e.preventDefault();
           break;
         case 'End':
-          setIndex(game.length);
+          setIndex(total);
           e.preventDefault();
           break;
       }
@@ -434,7 +583,7 @@ export function ReviewView({
 
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [game, active]);
+  }, [model, moveRecords, active]);
 
   // ── 各種計算 ─────────────────────────────────────────────────
 
@@ -452,8 +601,8 @@ export function ReviewView({
    * 黒が指した後: evalAfter > 0 = 黒有利 → 符号を反転して白視点に
    */
   const lastMoveColor =
-    game && currentPly >= 0 && currentPly < game.moves.length
-      ? game.moves[currentPly].color
+    model && currentPly >= 0 && currentPly < moveRecords.length
+      ? moveRecords[currentPly].color
       : undefined;
   const evalCpWhite =
     currentContext?.evalAfter !== undefined && lastMoveColor !== undefined
@@ -468,13 +617,19 @@ export function ReviewView({
 
   // 精度サマリ計算(解析済みコンテキストが変わるたびに再計算)
   const accuracySummary = useMemo(
-    () => (game ? computeAccuracySummary(contexts, game.moves) : null),
-    [contexts, game],
+    () => (model ? computeAccuracySummary(contexts, moveRecords) : null),
+    [contexts, model, moveRecords],
   );
 
-  const fen = game ? game.fenAt(index) : 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-  const lastMoveUci = game && index >= 1 ? game.moves[index - 1].uci : null;
-  const max = game?.length ?? 0;
+  // 表示局面。model 未ロード時は kind に応じた既定局面（chess=FEN / shogi=SFEN）で空表示する。
+  const fen = model
+    ? model.fenAt(index)
+    : kind === 'shogi'
+      ? DEFAULT_SHOGI_SFEN
+      : DEFAULT_CHESS_FEN;
+  // 直前手（chess=UCI / shogi=USI。どちらも盤コンポーネントが座標として解釈する）。
+  const lastMoveUci = model && index >= 1 ? moveRecords[index - 1].uci : null;
+  const max = moveRecords.length;
 
   // ── 解説コールバック ─────────────────────────────────────────
 
@@ -484,7 +639,7 @@ export function ReviewView({
     try {
       const text = await requestExplanation({
         mode: 'explain',
-        game: 'chess',
+        game: model?.kind ?? 'chess',
         context: currentContext,
         profile,
       });
@@ -497,7 +652,7 @@ export function ReviewView({
     } finally {
       setBusy(false);
     }
-  }, [currentContext, currentPly, profile]);
+  }, [currentContext, currentPly, profile, model]);
 
   // onExplain の最新版を常に ref に同期(自動解説の stale closure 対策)
   onExplainRef.current = onExplain;
@@ -514,7 +669,7 @@ export function ReviewView({
       try {
         const text = await requestExplanation({
           mode: 'followup',
-          game: 'chess',
+          game: model?.kind ?? 'chess',
           context: currentContext,
           question,
           history: prevThread,
@@ -542,7 +697,7 @@ export function ReviewView({
         setBusy(false);
       }
     },
-    [currentContext, currentPly, threads, profile],
+    [currentContext, currentPly, threads, profile, model],
   );
 
   // ── 自動解説(デバウンス ~500ms) ─────────────────────────────
@@ -616,7 +771,7 @@ export function ReviewView({
       {/* ── 使い方ヒントバナー(初回訪問 or ヒント未閉じ) ────────
           game がロード済みのとき表示(自動ロード後に表示されるため空画面は避けられる)。
           閉じた状態は localStorage セッションに保存される。                     */}
-      {!hintDismissed && game && (
+      {!hintDismissed && model && (
         <div
           role="note"
           aria-label="使い方ヒント"
@@ -636,14 +791,45 @@ export function ReviewView({
         </div>
       )}
 
-      {/* ── ツールバー(エンジン状態 + レベル切替) ── */}
+      {/* ── ツールバー(チェス/将棋 切替 + エンジン状態 + レベル切替) ── */}
       <div className="mb-5 flex flex-wrap items-center gap-2">
+        {/* チェス/将棋 切替（レビュータブ内のゲーム種別トグル）。
+            aria-pressed のトグルボタンで App のモード切替と実装方針を揃える。 */}
+        <div
+          aria-label="ゲーム種別切替"
+          className="flex rounded-lg border border-border bg-surface p-0.5"
+        >
+          {(
+            [
+              { k: 'chess' as const, label: 'チェス' },
+              { k: 'shogi' as const, label: '将棋' },
+            ] satisfies { k: GameKind; label: string }[]
+          ).map(({ k, label }) => (
+            <button
+              key={k}
+              type="button"
+              aria-pressed={kind === k}
+              onClick={() => switchKind(k)}
+              className={[
+                'focus-ai min-h-8 rounded px-2.5 text-xs font-medium transition-colors',
+                kind === k ? 'bg-ai text-white dark:bg-ai-dim' : 'text-muted hover:text-on-surface',
+              ].join(' ')}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         <span className="text-xs text-subtle">
           {engineKind === 'loading'
             ? '読み込み中…'
             : engineKind === 'stockfish'
               ? 'Stockfish WASM'
-              : 'モック評価'}
+              : engineKind === 'yaneuraou'
+                ? 'やねうら王 WASM'
+                : engineKind === 'unsupported'
+                  ? 'エンジン非対応（閲覧のみ）'
+                  : 'モック評価'}
         </span>
 
         <div className="ml-auto flex items-center gap-1">
@@ -666,6 +852,17 @@ export function ReviewView({
         </div>
       </div>
 
+      {/* 将棋エンジン非対応の告知（Safari 等・coi=false）。盤の閲覧とナビは可能。 */}
+      {kind === 'shogi' && engineKind === 'unsupported' && (
+        <div
+          role="note"
+          className="mb-4 rounded-xl border border-border bg-surface-2 px-4 py-2.5 text-xs text-muted"
+        >
+          お使いのブラウザは将棋エンジン解析に未対応です（盤面の閲覧は可能）。 Chrome / Edge など
+          SharedArrayBuffer 対応ブラウザでは 1 手ごとの解析・採点が使えます。
+        </div>
+      )}
+
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
         {/* ── 盤 + 評価バー + ナビ + 評価グラフ ── */}
         <section className="flex flex-col gap-4">
@@ -675,8 +872,19 @@ export function ReviewView({
               <EvalBar evalCp={evalCpWhite} />
             </div>
             <div className="min-w-0 flex-1">
-              {/* orientation を state で制御 → 盤反転ボタンと連動 */}
-              <Board fen={fen} lastMoveUci={lastMoveUci} orientation={orientation} />
+              {/* orientation を state で制御 → 盤反転ボタンと連動。
+                  将棋は shogiground(遅延ロード)、チェスは chessground。fen は kind で FEN/SFEN。 */}
+              {kind === 'shogi' ? (
+                <Suspense
+                  fallback={
+                    <div className="aspect-square w-full animate-pulse rounded bg-surface-2" />
+                  }
+                >
+                  <ShogiBoard sfen={fen} lastMoveUsi={lastMoveUci} orientation={orientation} />
+                </Suspense>
+              ) : (
+                <Board fen={fen} lastMoveUci={lastMoveUci} orientation={orientation} />
+              )}
             </div>
           </div>
 
@@ -688,13 +896,13 @@ export function ReviewView({
               label="⏮"
               ariaLabel="先頭へ"
               onClick={() => setIndex(0)}
-              disabled={!game || index === 0}
+              disabled={!model || index === 0}
             />
             <NavButton
               label="◀"
               ariaLabel="1手戻る（←キーでも操作可）"
               onClick={() => setIndex((i) => Math.max(0, i - 1))}
-              disabled={!game || index === 0}
+              disabled={!model || index === 0}
             />
             <span className="min-w-[4.5rem] text-center text-sm tabular-nums text-muted">
               {index} / {max}
@@ -703,13 +911,13 @@ export function ReviewView({
               label="▶"
               ariaLabel="1手進む（→キーでも操作可）"
               onClick={() => setIndex((i) => Math.min(max, i + 1))}
-              disabled={!game || index === max}
+              disabled={!model || index === max}
             />
             <NavButton
               label="⏭"
               ariaLabel="末尾へ"
               onClick={() => setIndex(max)}
-              disabled={!game || index === max}
+              disabled={!model || index === max}
             />
             {/* 盤反転ボタン
                 WHY 同じ行に置くか: ナビとセットで使うことが多く、
@@ -719,19 +927,21 @@ export function ReviewView({
               onClick={() => setOrientation((o) => (o === 'white' ? 'black' : 'white'))}
               aria-label={`盤を反転（現在: ${orientation === 'white' ? '白目線' : '黒目線'}）`}
               title="盤を反転"
-              disabled={!game}
+              disabled={!model}
               className="focus-ai ml-1 min-h-11 min-w-11 rounded-lg border border-border px-3 text-sm text-on-surface transition-colors hover:bg-surface-2 disabled:opacity-30"
             >
               ⇅
             </button>
             {/* この局面から対局(Phase 2B・④「復習で再開」の実装)
                 現在表示中の局面 FEN を PlayView へ渡してカジュアル対局を開始する。
-                「悪手の場面から自分ならどう指すか試す」という復習ループの核。 */}
-            {onPlayFrom && (
+                「悪手の場面から自分ならどう指すか試す」という復習ループの核。
+                WHY チェス限定か: PlayView(対局)は現状チェス専用。将棋の局面を渡しても対局できないので
+                将棋モードでは導線ごと隠す（将棋の対局は Phase 4-2 で別途）。 */}
+            {onPlayFrom && kind === 'chess' && (
               <button
                 type="button"
-                onClick={() => game && onPlayFrom(game.fenAt(index))}
-                disabled={!game}
+                onClick={() => model && onPlayFrom(model.fenAt(index))}
+                disabled={!model}
                 title="表示中の局面から AI と対局（カジュアル・あなたは手番側）"
                 className="focus-ai ml-1 min-h-11 rounded-lg border border-ai px-3 text-sm font-medium text-ai transition-colors hover:bg-ai-bg disabled:opacity-30 dark:border-ai-muted dark:text-ai-muted dark:hover:bg-ai-deep"
               >
@@ -743,10 +953,10 @@ export function ReviewView({
           {/* 評価グラフ
               解析済みデータが増えるにつれてリアルタイムで更新される。
               クリックでその手へジャンプ。 */}
-          {game && (
+          {model && (
             <div className="mx-auto w-full max-w-[500px] rounded-lg border border-border bg-surface-2 p-2 shadow-card">
               <EvalGraph
-                moves={game.moves}
+                moves={moveRecords}
                 contexts={contexts}
                 currentIndex={index}
                 onSeek={setIndex}
@@ -755,125 +965,192 @@ export function ReviewView({
           )}
         </section>
 
-        {/* ── サイドパネル: PGN読み込み + 解析 + 手順表 + 解説 ── */}
+        {/* ── サイドパネル: 棋譜読込 + 解析 + 手順表 + 解説 ── */}
         <aside className="flex flex-col gap-4">
-          {/* PGN 読み込みセクション */}
-          <details
-            open
-            className="group rounded-xl border border-border bg-surface-2 p-4 shadow-card"
-          >
-            <summary className="focus-ai -m-1 cursor-pointer rounded p-1 text-sm font-semibold text-on-surface">
-              棋譜を読み込む（PGN）
-            </summary>
+          {/* PGN 読み込みセクション（チェス時のみ） */}
+          {kind === 'chess' && (
+            <details
+              open
+              className="group rounded-xl border border-border bg-surface-2 p-4 shadow-card"
+            >
+              <summary className="focus-ai -m-1 cursor-pointer rounded p-1 text-sm font-semibold text-on-surface">
+                棋譜を読み込む（PGN）
+              </summary>
 
-            <div className="mt-3 flex flex-col gap-3">
-              {/* サンプル対局クイックロード
+              <div className="mt-3 flex flex-col gap-3">
+                {/* サンプル対局クイックロード
                   テキストエリアを埋めるだけ。読み込みは「読み込む」ボタンで確定。 */}
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-[10px] text-subtle">サンプル</span>
-                {SAMPLE_GAMES.map(({ label, pgn }) => (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] text-subtle">サンプル</span>
+                  {SAMPLE_GAMES.map(({ label, pgn }) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => setPgnText(pgn)}
+                      className="focus-ai rounded border border-border px-2 py-1 text-[10px] text-muted transition-colors hover:border-ai hover:text-ai"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <textarea
+                  value={pgnText}
+                  onChange={(e) => setPgnText(e.target.value)}
+                  rows={5}
+                  spellCheck={false}
+                  className="w-full rounded-lg border border-border bg-surface p-2.5 font-mono text-xs text-on-surface placeholder:text-subtle focus:border-ai focus:outline-none"
+                />
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* 読み込みボタン */}
                   <button
-                    key={label}
                     type="button"
-                    onClick={() => setPgnText(pgn)}
-                    className="focus-ai rounded border border-border px-2 py-1 text-[10px] text-muted transition-colors hover:border-ai hover:text-ai"
+                    onClick={handleLoad}
+                    className="focus-ai rounded-lg bg-ai px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-ai-hover dark:bg-ai-dim dark:hover:bg-ai"
                   >
-                    {label}
+                    読み込む
                   </button>
-                ))}
-              </div>
 
-              <textarea
-                value={pgnText}
-                onChange={(e) => setPgnText(e.target.value)}
-                rows={5}
-                spellCheck={false}
-                className="w-full rounded-lg border border-border bg-surface p-2.5 font-mono text-xs text-on-surface placeholder:text-subtle focus:border-ai focus:outline-none"
-              />
-
-              <div className="flex flex-wrap items-center gap-2">
-                {/* 読み込みボタン */}
-                <button
-                  type="button"
-                  onClick={handleLoad}
-                  className="focus-ai rounded-lg bg-ai px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-ai-hover dark:bg-ai-dim dark:hover:bg-ai"
-                >
-                  読み込む
-                </button>
-
-                {/* .pgn ファイルアップロード
+                  {/* .pgn ファイルアップロード
                     label でクリック領域を広げ、実 input は sr-only で非表示。
                     WHY label: ファイル選択 UI はブラウザ実装依存のため、
                     カスタムボタンに見せるには label で包む手法が最も互換性が高い。 */}
-                <label className="focus-ai cursor-pointer rounded-lg border border-border px-3 py-2 text-sm text-muted transition-colors hover:border-ai hover:text-ai">
-                  PGN ファイル
-                  <input
-                    type="file"
-                    accept=".pgn,text/plain"
-                    className="sr-only"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      const reader = new FileReader();
-                      reader.onload = (ev) => setPgnText((ev.target?.result as string) ?? '');
-                      reader.readAsText(file);
-                      // 同じファイルを再度選択できるよう value をリセット
-                      e.target.value = '';
-                    }}
-                  />
-                </label>
+                  <label className="focus-ai cursor-pointer rounded-lg border border-border px-3 py-2 text-sm text-muted transition-colors hover:border-ai hover:text-ai">
+                    PGN ファイル
+                    <input
+                      type="file"
+                      accept=".pgn,text/plain"
+                      className="sr-only"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (ev) => setPgnText((ev.target?.result as string) ?? '');
+                        reader.readAsText(file);
+                        // 同じファイルを再度選択できるよう value をリセット
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
 
-                {error && (
-                  <p className="text-xs text-[var(--q-miss-fg)]" role="alert">
-                    {error}
-                  </p>
-                )}
-              </div>
+                  {error && (
+                    <p className="text-xs text-[var(--q-miss-fg)]" role="alert">
+                      {error}
+                    </p>
+                  )}
+                </div>
 
-              {/* 共有リンク ─────────────────────────────────────────
+                {/* 共有リンク ─────────────────────────────────────────
                   loadedPgn がある場合のみ表示。SHARE_MAX_PGN_CHARS を超える棋譜は
                   ボタンを無効化し注記を表示(コピーすると URL が壊れる可能性を排除)。
                   WHY URL ハッシュか: クエリパラメータと違い、ハッシュはサーバーに
                   送信されないためバックエンド側の処理が不要。SPA 向きの方式。   */}
-              {loadedPgn && (
-                <div className="flex flex-wrap items-center gap-2 border-t border-border pt-2">
+                {loadedPgn && (
+                  <div className="flex flex-wrap items-center gap-2 border-t border-border pt-2">
+                    <button
+                      type="button"
+                      onClick={handleShareCopy}
+                      disabled={!shareUrl}
+                      title={
+                        !shareUrl
+                          ? `棋譜が ${SHARE_MAX_PGN_CHARS} 文字を超えているため共有できません`
+                          : '現在の棋譜の共有リンクをクリップボードにコピー'
+                      }
+                      className="focus-ai rounded-lg border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:border-ai hover:text-ai disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {shareCopied ? 'コピーしました！' : '共有リンクをコピー'}
+                    </button>
+                    {!shareUrl && (
+                      <span className="text-[10px] text-subtle">
+                        棋譜が長すぎます（上限 {SHARE_MAX_PGN_CHARS} 文字）
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </details>
+          )}
+
+          {/* 将棋棋譜 読み込みセクション（将棋時のみ・KIF/CSA/SFEN） */}
+          {kind === 'shogi' && (
+            <details
+              open
+              className="group rounded-xl border border-border bg-surface-2 p-4 shadow-card"
+            >
+              <summary className="focus-ai -m-1 cursor-pointer rounded p-1 text-sm font-semibold text-on-surface">
+                棋譜を読み込む（KIF / CSA / SFEN）
+              </summary>
+
+              <div className="mt-3 flex flex-col gap-3">
+                <textarea
+                  value={shogiText}
+                  onChange={(e) => setShogiText(e.target.value)}
+                  rows={6}
+                  spellCheck={false}
+                  aria-label="将棋の棋譜（KIF / CSA / SFEN）"
+                  className="w-full rounded-lg border border-border bg-surface p-2.5 font-mono text-xs text-on-surface placeholder:text-subtle focus:border-ai focus:outline-none"
+                />
+
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={handleShareCopy}
-                    disabled={!shareUrl}
-                    title={
-                      !shareUrl
-                        ? `棋譜が ${SHARE_MAX_PGN_CHARS} 文字を超えているため共有できません`
-                        : '現在の棋譜の共有リンクをクリップボードにコピー'
-                    }
-                    className="focus-ai rounded-lg border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:border-ai hover:text-ai disabled:cursor-not-allowed disabled:opacity-40"
+                    onClick={() => void loadShogi(shogiText)}
+                    disabled={shogiLoading}
+                    className="focus-ai rounded-lg bg-ai px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-ai-hover disabled:opacity-50 dark:bg-ai-dim dark:hover:bg-ai"
                   >
-                    {shareCopied ? 'コピーしました！' : '共有リンクをコピー'}
+                    {shogiLoading ? '読み込み中…' : '読み込む'}
                   </button>
-                  {!shareUrl && (
-                    <span className="text-[10px] text-subtle">
-                      棋譜が長すぎます（上限 {SHARE_MAX_PGN_CHARS} 文字）
-                    </span>
+
+                  {/* .kif/.csa ファイルアップロード（PGN 版と同じ label 手法） */}
+                  <label className="focus-ai cursor-pointer rounded-lg border border-border px-3 py-2 text-sm text-muted transition-colors hover:border-ai hover:text-ai">
+                    KIF/CSA ファイル
+                    <input
+                      type="file"
+                      accept=".kif,.kifu,.ki2,.csa,text/plain"
+                      className="sr-only"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (ev) => setShogiText((ev.target?.result as string) ?? '');
+                        reader.readAsText(file);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+
+                  {error && (
+                    <p className="text-xs text-[var(--q-miss-fg)]" role="alert">
+                      {error}
+                    </p>
                   )}
                 </div>
-              )}
-            </div>
-          </details>
+              </div>
+            </details>
+          )}
 
           {/* 全手解析セクション(ゲーム読み込み後のみ表示) */}
-          {game && (
+          {model && (
             <div className="rounded-xl border border-border bg-surface-2 p-4 shadow-card">
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <h2 className="text-sm font-semibold text-on-surface">全手解析</h2>
                   <p className="mt-0.5 text-xs text-muted">
-                    全{game.length}手をエンジンで一括解析します
+                    全{moveRecords.length}手をエンジンで一括解析します
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={handleAnalyzeAll}
-                  disabled={analyzeAllProgress !== null || engineKind === 'loading'}
+                  disabled={
+                    analyzeAllProgress !== null ||
+                    engineKind === 'loading' ||
+                    engineKind === 'unsupported' ||
+                    // 0手モデル(SFEN 単体等)では解析対象が無く、進捗が 0/0 = NaN% になる
+                    // (Codex ゲート② nice-to-have)。押せなくして構造的に防ぐ。
+                    moveRecords.length === 0
+                  }
                   className="focus-ai shrink-0 rounded-lg border border-ai px-3 py-2 text-sm font-medium text-ai transition-colors hover:bg-ai-bg disabled:cursor-not-allowed disabled:opacity-50 dark:border-ai-muted dark:text-ai-muted dark:hover:bg-ai-deep"
                 >
                   {analyzeAllProgress !== null ? '解析中…' : '全手を解析'}
@@ -931,9 +1208,9 @@ export function ReviewView({
           {/* 手順表
               contexts を渡して解析済み手に評価値を表示。
               currentIndex が変わると自動スクロール(MoveList 内で制御)。 */}
-          {game && (
+          {model && (
             <MoveList
-              moves={game.moves}
+              moves={moveRecords}
               currentIndex={index}
               qualities={qualities}
               contexts={contexts}
@@ -942,8 +1219,8 @@ export function ReviewView({
           )}
 
           {/* 精度サマリ(1手以上解析済みのとき表示) */}
-          {game && accuracySummary && (
-            <AccuracySummary summary={accuracySummary} totalMoves={game.length} />
+          {model && accuracySummary && (
+            <AccuracySummary summary={accuracySummary} totalMoves={moveRecords.length} />
           )}
 
           {/* 解説パネル */}

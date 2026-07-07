@@ -1,0 +1,204 @@
+/*
+ * shogiBoard.css — shogiground 閲覧盤の自前スタイル（駒は画像でなく漢字グリフ）
+ *
+ * WHY 自前 CSS + 漢字グリフか（アセット依存を断つ設計判断）:
+ *   shogiground は chessground と違い CSS も駒画像も npm パッケージに同梱していない
+ *   （examples/assets を各自で用意する前提）。駒スプライト画像を vendor するとファイル管理・
+ *   ライセンス・遅延ロードが増える。閲覧専用 MVP には「漢字1文字を CSS content で描く」方式が
+ *   最小で足りる（画像アセット 0・完全に自己完結）。将来インタラクティブ化(4-2)で見栄えを上げたく
+ *   なったら、その時にスプライトへ差し替える余地は残している。
+ *
+ * WHY このファイルは ShogiBoard.tsx からのみ import するか（1バイト不変条件）:
+ *   ShogiBoard は React.lazy で動的ロードされる。CSS もその将棋チャンクに紐づき、チェス利用者の
+ *   メインバンドルには載らない。メインの Board(chessground) 系からは絶対に import しないこと。
+ *
+ * shogiground の DOM（wrap.js より）:
+ *   .sg-wrap                      ← React が渡す div。inlined 持ち駒だと縦に [top,board,bottom]
+ *     sg-hand-wrap.hand-top       ← 後手（盤上向き）の持ち駒
+ *       sg-hand > sg-hp-wrap[data-nb] > piece.<color>.<role>
+ *     sg-board                    ← 9x9 盤
+ *       sg-squares > sq           ← マス（last-dest 等のクラスが付く）
+ *       sg-pieces > piece         ← 盤上の駒（inline transform で translate 配置）
+ *     sg-hand-wrap.hand-bottom    ← 先手の持ち駒
+ */
+
+.sg-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 盤本体: 正方形・木目風の地色。container-type で子孫がマス基準のフォントサイズを取れるようにする。 */
+.sg-wrap sg-board {
+  display: block;
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: #f2d9a4;
+  border: 2px solid #7a5a2e;
+  container-type: inline-size;
+}
+
+/* マス目のグリッド線。sq は行優先で 81 個並ぶので 9x9 グリッドに自然に収まる。 */
+.sg-wrap sg-squares {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  grid-template-rows: repeat(9, 1fr);
+}
+.sg-wrap sg-squares sq {
+  box-sizing: border-box;
+  border-right: 1px solid #b7935a;
+  border-bottom: 1px solid #b7935a;
+}
+/* 直前の手のマスをハイライト（config.lastDests 由来のクラス）。 */
+.sg-wrap sg-squares sq.last-dest {
+  background: rgba(155, 199, 0, 0.4);
+}
+
+/* 盤上の駒レイヤ。piece は shogiground が inline transform: translate(x%,y%) で配置する。
+   1駒 = 盤の 1/9（11.111%）に固定することで、translate の 100% 単位＝1マス移動になる。 */
+.sg-wrap sg-pieces {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+.sg-wrap sg-pieces piece {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 11.111%;
+  height: 11.111%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 駒グリフ共通。cqw で盤幅に比例させる（レスポンシブ）。明朝系で将棋駒らしく。 */
+.sg-wrap piece::after {
+  display: block;
+  line-height: 1;
+  font-weight: 700;
+  color: #2b2b2b;
+  font-family: 'Hiragino Mincho ProN', 'Yu Mincho', 'YuMincho', serif;
+}
+.sg-wrap sg-pieces piece::after {
+  font-size: 7.4cqw;
+}
+/* 後手の盤上駒は 180 度回転（駒の向きで手番を示す）。piece 自体の translate を壊さないよう
+   ::after（グリフ）だけを回す。 */
+.sg-wrap sg-pieces piece.gote::after {
+  transform: rotate(180deg);
+}
+
+/* 駒種 → 漢字1文字（成駒は略字: と/杏/圭/全/馬/龍）。 */
+.sg-wrap piece.pawn::after {
+  content: '歩';
+}
+.sg-wrap piece.lance::after {
+  content: '香';
+}
+.sg-wrap piece.knight::after {
+  content: '桂';
+}
+.sg-wrap piece.silver::after {
+  content: '銀';
+}
+.sg-wrap piece.gold::after {
+  content: '金';
+}
+.sg-wrap piece.bishop::after {
+  content: '角';
+}
+.sg-wrap piece.rook::after {
+  content: '飛';
+}
+.sg-wrap piece.king::after {
+  content: '玉';
+}
+.sg-wrap piece.tokin::after {
+  content: 'と';
+}
+.sg-wrap piece.promotedlance::after {
+  content: '杏';
+}
+.sg-wrap piece.promotedknight::after {
+  content: '圭';
+}
+.sg-wrap piece.promotedsilver::after {
+  content: '全';
+}
+.sg-wrap piece.horse::after {
+  content: '馬';
+}
+.sg-wrap piece.dragon::after {
+  content: '龍';
+}
+/* 成駒は朱色で強調（一目で成りが分かる）。 */
+.sg-wrap piece.tokin::after,
+.sg-wrap piece.promotedlance::after,
+.sg-wrap piece.promotedknight::after,
+.sg-wrap piece.promotedsilver::after,
+.sg-wrap piece.horse::after,
+.sg-wrap piece.dragon::after {
+  color: #b3452b;
+}
+
+/* ── 持ち駒（inlined） ─────────────────────────────────────── */
+.sg-wrap sg-hand-wrap {
+  display: block;
+  min-height: 1.8rem;
+  padding: 2px 4px;
+  border: 1px solid #d8c49a;
+  border-radius: 6px;
+  background: #faf1dc;
+}
+.sg-wrap sg-hand {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  align-items: center;
+}
+/* 各持ち駒。data-nb=0（未所持）は隠す。 */
+.sg-wrap sg-hp-wrap {
+  position: relative;
+  display: inline-flex;
+  width: 1.7rem;
+  height: 1.7rem;
+  align-items: center;
+  justify-content: center;
+}
+.sg-wrap sg-hp-wrap[data-nb='0'] {
+  display: none;
+}
+/* 枚数バッジ（2枚以上のときだけ数字を出す。1枚は駒だけで十分）。 */
+.sg-wrap sg-hp-wrap::after {
+  content: attr(data-nb);
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: #7a5a2e;
+  line-height: 1;
+}
+.sg-wrap sg-hp-wrap[data-nb='1']::after {
+  content: '';
+}
+/* 持ち駒の駒本体は流し込み配置（盤上と違い absolute にしない）。 */
+.sg-wrap sg-hand piece {
+  position: static;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sg-wrap sg-hand piece::after {
+  font-size: 1.1rem;
+}
