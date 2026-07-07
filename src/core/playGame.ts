@@ -96,15 +96,27 @@ export function opposite(c: PieceColor): PieceColor {
   return c === 'white' ? 'black' : 'white';
 }
 
+/** 標準初期配置の FEN。カスタム開始局面かどうかの判定に使う。 */
+const STANDARD_START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
 /** 対局を1手ずつ進めるコントローラ。chess.js を土台にした可変ステート。 */
 export class PlayGame {
   private chess: Chess;
   /** 投了した色(あれば)。chess.js は投了を表現しないので別フラグで持つ。 */
   private resignedBy: PieceColor | null = null;
+  /**
+   * 開始局面 FEN(Phase 2B「この局面から対局」用)。
+   * WHY 保持するか: カスタム開始局面の対局を PGN 化するとき [SetUp "1"][FEN "..."] ヘッダが
+   * 無いと、振り返り(ChessGame.fromPgn)が標準初期配置として誤読して棋譜が壊れる。
+   * pgn() でこのヘッダを明示的に付けるために覚えておく。
+   */
+  private readonly customStartFen: string | null;
 
-  /** 開始局面(省略時は標準初期配置)。将来の「途中局面から対局」用に startFen を受ける。 */
+  /** 開始局面(省略時は標準初期配置)。「途中局面から対局」(Phase 2B)は startFen を渡す。 */
   constructor(startFen?: string) {
     this.chess = startFen ? new Chess(startFen) : new Chess();
+    // 標準初期配置を明示的に渡された場合はカスタム扱いしない(不要なヘッダを付けない)
+    this.customStartFen = startFen && startFen !== STANDARD_START_FEN ? startFen : null;
   }
 
   /** 現在の局面 FEN。 */
@@ -270,10 +282,16 @@ export class PlayGame {
   /**
    * ヘッダ付き PGN を返す。振り返り(ReviewView)や履歴保存に使う。
    * Result ヘッダは resultToken() で上書きする(投了は chess.js が終局を知らないため必須)。
+   * カスタム開始局面(Phase 2B)は [SetUp "1"][FEN "..."] を明示的に付ける
+   * (chess.js の自動付与に依存しない。無いと振り返りが標準初期配置として誤読する)。
    */
   pgn(headers?: Record<string, string>): string {
     if (headers) {
       for (const [k, v] of Object.entries(headers)) this.chess.header(k, v);
+    }
+    if (this.customStartFen) {
+      this.chess.header('SetUp', '1');
+      this.chess.header('FEN', this.customStartFen);
     }
     this.chess.header('Result', this.resultToken());
     return this.chess.pgn();

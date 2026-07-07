@@ -7,13 +7,17 @@ import {
   type PromotionPiece,
 } from '../core/playGame';
 import { materialFromFen, lostPieces, type PieceLetter } from '../core/material';
+import { applyResult, INITIAL_RATING, type GameScore } from '../core/rating';
 import { createEngine, type EngineKind } from '../engine/factory';
 import type { ChessEngine } from '../engine/types';
 import {
   loadPlayedGames,
   savePlayedGame,
   deletePlayedGame,
+  loadRating,
+  saveRating,
   type PlayedGame,
+  type RatingData,
 } from '../core/storage';
 import { PlayBoard } from './PlayBoard';
 
@@ -51,21 +55,31 @@ interface Difficulty {
   movetimeMs: number;
   /** 目安の説明。 */
   desc: string;
+  /**
+   * 目安 Elo(オーナー要望 2026-07-07: AI の強さを数値で見せる)。
+   * レート戦(ローカル内部レート)の相手レートとしても使う=Elo 計算の入力。
+   */
+  elo: number;
 }
 
 /*
  * 難易度の値の根拠(WHY この数字か):
  *   Skill Level はStockfishがわざとノイズをのせるレバーでEloに概ね対応する
- *   (skill 0≈1350, 5≈1500, 10≈1700, 15≈1950, 20≈full)。初心者が「やさしい」で勝てて、
- *   「最強」で歯が立たない体験を作るためこの4段に離散化した。movetime は lite-single(単スレッド)
- *   の体感速度を一定に保つための上限。長すぎると待たされ、短すぎると弱くなりすぎるので中庸に。
- *   Phase C で内部 Elo を入れる際、この skill→Elo 対応が初期レートの足場になる。
+ *   (公称は skill0≈1350〜skill20≈3190 だが、これは十分な思考時間での値)。
+ *   本アプリは lite-single(単スレッド) + 短い movetime なので体感はそれより弱い。
+ *   elo はその体感に合わせた“目安”(lichess/chess.com のボット感覚に寄せた保守的な値):
+ *     やさしい skill1/300ms  ≈ 800  (入門者が勝てる)
+ *     ふつう   skill6/600ms  ≈ 1400 (初中級の壁)
+ *     つよい   skill12/1000ms ≈ 1900 (上級の入り口)
+ *     最強     skill20/1500ms ≈ 2800 (人間はほぼ勝てない)
+ *   この elo はレート戦の Elo 計算の相手レートにも使う。数値を変えるとユーザーの
+ *   レート変動カーブが変わるので、変更時は rating.ts のテストと合わせて検討すること。
  */
 const DIFFICULTIES: Difficulty[] = [
-  { key: 'easy', label: 'やさしい', skill: 1, movetimeMs: 300, desc: '入門〜初心者' },
-  { key: 'normal', label: 'ふつう', skill: 6, movetimeMs: 600, desc: '初級〜中級' },
-  { key: 'hard', label: 'つよい', skill: 12, movetimeMs: 1000, desc: '中級〜上級' },
-  { key: 'max', label: '最強', skill: 20, movetimeMs: 1500, desc: 'エンジン全力' },
+  { key: 'easy', label: 'やさしい', skill: 1, movetimeMs: 300, desc: '入門〜初心者', elo: 800 },
+  { key: 'normal', label: 'ふつう', skill: 6, movetimeMs: 600, desc: '初級〜中級', elo: 1400 },
+  { key: 'hard', label: 'つよい', skill: 12, movetimeMs: 1000, desc: '中級〜上級', elo: 1900 },
+  { key: 'max', label: '最強', skill: 20, movetimeMs: 1500, desc: 'エンジン全力', elo: 2800 },
 ];
 
 /*
@@ -113,9 +127,15 @@ function newId(): string {
 interface PlayViewProps {
   /** 「この対局を振り返る」で PGN をレビュー画面へ引き渡すコールバック。 */
   onReview: (pgn: string) => void;
+  /**
+   * レビュー画面からの「この局面から対局」(Phase 2B)。
+   * nonce を変えて渡すたびに、その FEN からカジュアル対局(レート変動なし)を開始する。
+   * WHY nonce か: 同じ FEN を連続で渡しても再開始できるように、値の変化で発火を検知する。
+   */
+  playFrom?: { fen: string; nonce: number } | null;
 }
 
-export function PlayView({ onReview }: PlayViewProps) {
+export function PlayView({ onReview, playFrom }: PlayViewProps) {
   // ── エンジン ────────────────────────────────────────────────
   const engineRef = useRef<ChessEngine | null>(null);
   const [engineKind, setEngineKind] = useState<EngineKind | 'loading'>('loading');
@@ -147,6 +167,36 @@ export function PlayView({ onReview }: PlayViewProps) {
 
   // ── 履歴 ────────────────────────────────────────────────────
   const [history, setHistory] = useState<PlayedGame[]>([]);
+
+  // ── ローカル内部レート(2026-07-07 オーナー GO) ────────────────
+  /*
+   * 設計: レート戦(rated) の AI 戦だけレートが動く。カジュアル戦は変動なし(オーナー構想)。
+   * 相手レート = 難易度の目安 Elo。Phase 2C でクラウド(profiles.rating)へ昇格予定のローカル実装。
+   *
+   * レート変動なしになる条件(公平性のための仕様):
+   *   - カジュアル選択時
+   *   - 「待った」を1回でも使った対局(usedTakebackRef)
+   *   - レビュー局面からの対局(Phase 2B: 任意局面スタートは有利不利が不明なため常にカジュアル)
+   */
+  const [myRating, setMyRating] = useState<RatingData>(
+    () =>
+      loadRating() ?? {
+        rating: INITIAL_RATING,
+        games: 0,
+      },
+  );
+  // 設定画面の選択(既定=レート戦。オーナー構想「カジュアルはレートが変動しない」の対になる既定)
+  const [ratedChoice, setRatedChoice] = useState(true);
+  // 進行中の対局がレート戦か(開始時に確定。ref で非同期処理からも読める)
+  const activeRatedRef = useRef(false);
+  // この対局で「待った」を使ったか → 使ったらレート変動なしに降格
+  const usedTakebackRef = useRef(false);
+  // 終局時のレート変動結果(ResultBanner 表示用)。null = カジュアル or 未終局。
+  const [ratingResult, setRatingResult] = useState<{
+    before: number;
+    after: number;
+    delta: number;
+  } | null>(null);
 
   // ── エンジン初期化(ReviewView と同じ作法。別インスタンス=別 worker で競合回避) ──
   useEffect(() => {
@@ -241,15 +291,32 @@ export function PlayView({ onReview }: PlayViewProps) {
   );
 
   // ── 対局開始 ────────────────────────────────────────────────
+  /*
+   * opts.startFen: Phase 2B「この局面から対局」。指定時は色選択を無視して
+   *   「その局面の手番側」をあなたに割り当てる(振り返り中の局面を"自分が指す番"として再開する意図)。
+   * opts.rated: レート戦か。startFen 指定時は強制カジュアル(任意局面は有利不利が不明で
+   *   レートの公平性が保てないため)。
+   */
   const startGame = useCallback(
-    (choice: ColorChoice, diff: Difficulty) => {
-      const color = resolveColor(choice);
-      const game = new PlayGame();
+    (choice: ColorChoice, diff: Difficulty, opts?: { startFen?: string; rated?: boolean }) => {
+      const startFen = opts?.startFen;
+      let game: PlayGame;
+      try {
+        game = new PlayGame(startFen);
+      } catch {
+        // 不正 FEN(手入力ミス等)。開始せず設定画面に留まる(呼び出し側でバリデーション済みが基本)。
+        return;
+      }
+      // startFen 指定時 = その局面の手番側があなた。通常時 = 選択(ランダム解決)。
+      const color: PieceColor = startFen ? game.turn : resolveColor(choice);
 
       // 同期的に ref を確定(runAiMove が即参照できるように state 更新前に入れる)
       gameRef.current = game;
       youColorRef.current = color;
       activeDifficultyRef.current = diff;
+      // レート戦判定: startFen 対局は強制カジュアル。待ったフラグもリセット。
+      activeRatedRef.current = Boolean(opts?.rated) && !startFen;
+      usedTakebackRef.current = false;
       ++turnTokenRef.current; // 前局の AI 応答を無効化
       savedCurrentRef.current = false;
 
@@ -257,10 +324,11 @@ export function PlayView({ onReview }: PlayViewProps) {
       setOrientation(color);
       setAiThinking(false);
       setAiError(false);
+      setRatingResult(null);
       setSnap(game.snapshot());
 
-      // 自分が黒 = AI(白)が先手 → 開始と同時に AI の初手
-      if (color === 'black') void runAiMove();
+      // AI が先手(あなたが後手番)なら開始と同時に AI の初手
+      if (game.turn !== color) void runAiMove();
     },
     [runAiMove],
   );
@@ -285,6 +353,8 @@ export function PlayView({ onReview }: PlayViewProps) {
     ++turnTokenRef.current; // 進行中の AI 応答を無効化
     game.clearResign(); // 防御: 終局状態からでも巻き戻せるように(通常は no-op)
     if (!game.undo()) return; // 戻す手が無ければ何もしない
+    // 待ったを使った対局はレート変動なしに降格(公平性)。UI にも注記が出る。
+    usedTakebackRef.current = true;
     // 戻した結果が AI の手番なら、自分の手番になるようもう1手戻す
     if (game.turn !== youColorRef.current) game.undo();
     savedCurrentRef.current = false; // 終局保存フラグを解除(巻き戻したので)
@@ -307,7 +377,7 @@ export function PlayView({ onReview }: PlayViewProps) {
     setHistory(loadPlayedGames());
   }, []);
 
-  // ── 終局時に履歴へ自動保存 ──────────────────────────────────
+  // ── 終局時に履歴へ自動保存 + レート更新 ─────────────────────
   useEffect(() => {
     if (!snap || !snap.outcome.over) return;
     if (savedCurrentRef.current) return;
@@ -319,23 +389,62 @@ export function PlayView({ onReview }: PlayViewProps) {
     const humanOutcome: PlayedGame['outcome'] =
       outcome.winner === null ? 'draw' : outcome.winner === youColor ? 'win' : 'loss';
     const opponent = `AI (${activeDifficultyRef.current.label})`;
-    const pgn = game.pgn({
-      Event: 'AI 戦',
-      White: youColor === 'white' ? 'You' : opponent,
-      Black: youColor === 'black' ? 'You' : opponent,
-    });
-    const played: PlayedGame = {
-      id: newId(),
-      createdAt: Date.now(),
-      pgn,
-      result: game.resultToken(),
-      outcome: humanOutcome,
-      youColor,
-      opponent,
-      moveCount: snap.moveCount,
-    };
-    setHistory(savePlayedGame(played));
+    // 0手対局(開始直後の投了)は履歴に保存しない。
+    // WHY: 手の無い PGN は ReviewView(ChessGame.fromPgn)が「手が見つかりません」で読めず、
+    // 履歴の「振り返る」が必ずエラーになる(実E2Eで発覚)。見る中身も無いので保存自体を省く。
+    // レート戦の場合のレート減算は下で通常どおり行う(即投了の逃げ得防止)。
+    if (snap.moveCount > 0) {
+      const pgn = game.pgn({
+        Event: 'AI 戦',
+        White: youColor === 'white' ? 'You' : opponent,
+        Black: youColor === 'black' ? 'You' : opponent,
+      });
+      const played: PlayedGame = {
+        id: newId(),
+        createdAt: Date.now(),
+        pgn,
+        result: game.resultToken(),
+        outcome: humanOutcome,
+        youColor,
+        opponent,
+        moveCount: snap.moveCount,
+      };
+      setHistory(savePlayedGame(played));
+    }
+
+    /*
+     * レート更新(レート戦のみ・この effect は savedCurrentRef で1終局1回が保証済み)。
+     * 待った使用時は降格(usedTakebackRef)。相手レート = 難易度の目安 Elo。
+     * WHY 0手投了もカウントするか: レート戦を建てて即投了は Elo 上「負け」が正しい
+     * (逃げ得を許すとレートが実力とズレる)。カジュアルで気軽に試せるので不便はない。
+     */
+    if (activeRatedRef.current && !usedTakebackRef.current) {
+      const score: GameScore = humanOutcome === 'win' ? 1 : humanOutcome === 'draw' ? 0.5 : 0;
+      const oppElo = activeDifficultyRef.current.elo;
+      setMyRating((prev) => {
+        const applied = applyResult(prev.rating, oppElo, score);
+        const next: RatingData = { rating: applied.rating, games: prev.games + 1 };
+        saveRating(next);
+        setRatingResult({ before: prev.rating, after: applied.rating, delta: applied.delta });
+        return next;
+      });
+    }
   }, [snap, youColor]);
+
+  // ── レビュー局面からの対局開始(Phase 2B) ────────────────────
+  /*
+   * App 経由で playFrom(fen + nonce)が渡されたら、その局面からカジュアル対局を開始する。
+   * nonce の変化だけに反応(同一 FEN の再要求にも応える)。難易度は現在の選択を使う。
+   */
+  const lastPlayFromNonce = useRef<number | null>(null);
+  useEffect(() => {
+    if (!playFrom) return;
+    if (lastPlayFromNonce.current === playFrom.nonce) return;
+    lastPlayFromNonce.current = playFrom.nonce;
+    startGame(colorChoice, difficulty, { startFen: playFrom.fen, rated: false });
+    // colorChoice は startFen 時に無視されるが、依存には正直に入れる(値が変わっても再発火しないのは
+    // nonce ガードのおかげ。ガードが本質でここの deps は形式)。
+  }, [playFrom, startGame, colorChoice, difficulty]);
 
   // ── 派生値 ──────────────────────────────────────────────────
   const isOver = snap?.outcome.over ?? false;
@@ -383,10 +492,14 @@ export function PlayView({ onReview }: PlayViewProps) {
         <SetupScreen
           colorChoice={colorChoice}
           difficulty={difficulty}
+          rated={ratedChoice}
+          myRating={myRating}
           engineLoading={engineKind === 'loading'}
           onColorChange={setColorChoice}
           onDifficultyChange={setDifficulty}
-          onStart={() => startGame(colorChoice, difficulty)}
+          onRatedChange={setRatedChoice}
+          onStart={() => startGame(colorChoice, difficulty, { rated: ratedChoice })}
+          onStartFromFen={(fen) => startGame(colorChoice, difficulty, { startFen: fen })}
           history={history}
           onReviewHistory={(pgn) => onReview(pgn)}
           onDeleteHistory={(id) => setHistory(deletePlayedGame(id))}
@@ -401,7 +514,7 @@ export function PlayView({ onReview }: PlayViewProps) {
             <div className="mx-auto w-full max-w-[500px]">
               {youMat && oppMat && (
                 <PlayerPlate
-                  name={opponentName}
+                  name={`${opponentName} ・目安${activeDifficultyRef.current.elo}`}
                   captured={lostPieces(youMat.counts)} // 相手が取った駒 = あなたが失った駒
                   capturedColor={youColor} // あなたの駒なのであなたの色のグリフ
                   diff={oppMat.points - youMat.points}
@@ -421,7 +534,8 @@ export function PlayView({ onReview }: PlayViewProps) {
               />
               {youMat && oppMat && (
                 <PlayerPlate
-                  name="あなた"
+                  // レート戦中はあなたのレートを併記(カジュアルはレート非表示=変動しないことの暗黙表現)
+                  name={activeRatedRef.current ? `あなた (${myRating.rating})` : 'あなた'}
                   captured={lostPieces(oppMat.counts)} // あなたが取った駒 = 相手が失った駒
                   capturedColor={oppColor}
                   diff={youMat.points - oppMat.points}
@@ -475,11 +589,14 @@ export function PlayView({ onReview }: PlayViewProps) {
               <ResultBanner
                 outcome={snap.outcome}
                 youColor={youColor}
+                ratingResult={ratingResult}
+                // 0手対局は振り返る棋譜が無い(ChessGame.fromPgn が読めない)ため導線を隠す
+                canReview={snap.moveCount > 0}
                 onReview={() => {
                   const game = gameRef.current;
                   if (game) onReview(game.pgn());
                 }}
-                onRematch={() => startGame(colorChoice, difficulty)}
+                onRematch={() => startGame(colorChoice, difficulty, { rated: ratedChoice })}
                 onNewGame={handleNewGame}
               />
             )}
@@ -509,6 +626,14 @@ export function PlayView({ onReview }: PlayViewProps) {
                 >
                   中断して新規
                 </button>
+                {/* レート戦で待ったを使うとレート変動なしに降格したことを明示(公平性の可視化)。
+                    ref を render で読むのは通常アンチパターンだが、待った操作は必ず setSnap を
+                    伴い再レンダーされるため、この表示は常に最新値を反映する(コメントで担保)。 */}
+                {activeRatedRef.current && usedTakebackRef.current && (
+                  <p className="w-full text-[10px] text-subtle" role="note">
+                    「待った」を使ったため、この対局はレート変動なしになりました
+                  </p>
+                )}
               </div>
             )}
 
@@ -527,24 +652,33 @@ export function PlayView({ onReview }: PlayViewProps) {
  * 単体再利用の予定が無いため(コヒーレンス優先)。
  * ════════════════════════════════════════════════════════════ */
 
-/** 設定画面: 色・難度の選択 + 履歴一覧。 */
+/** 設定画面: 色・難度・レート戦/カジュアルの選択 + FEN開始 + 履歴一覧。 */
 function SetupScreen({
   colorChoice,
   difficulty,
+  rated,
+  myRating,
   engineLoading,
   onColorChange,
   onDifficultyChange,
+  onRatedChange,
   onStart,
+  onStartFromFen,
   history,
   onReviewHistory,
   onDeleteHistory,
 }: {
   colorChoice: ColorChoice;
   difficulty: Difficulty;
+  rated: boolean;
+  myRating: RatingData;
   engineLoading: boolean;
   onColorChange: (c: ColorChoice) => void;
   onDifficultyChange: (d: Difficulty) => void;
+  onRatedChange: (r: boolean) => void;
   onStart: () => void;
+  /** FEN 文字列から対局開始(Phase 2B: 詰将棋/練習問題用途。常にカジュアル)。 */
+  onStartFromFen: (fen: string) => void;
   history: PlayedGame[];
   onReviewHistory: (pgn: string) => void;
   onDeleteHistory: (id: string) => void;
@@ -554,6 +688,12 @@ function SetupScreen({
     { value: 'black', label: '黒（後手）' },
     { value: 'random', label: 'ランダム' },
   ];
+
+  // FEN 入力(details 内のローカル state で十分 — 開始したら PlayView 側の状態機械に引き継がれる)
+  const [fenText, setFenText] = useState('');
+  // 簡易バリデーション: chess.js での本検証は startGame 側。ここでは空/明らかな非FENだけ弾いて
+  // ボタンを無効化する(フィールド数 4〜6 の空白区切り + 盤面に '/' を7個含む、程度のゆるい判定)。
+  const fenLooksValid = /^[\S]+(\/[\S]+){7}\s+[wb]\s+/.test(fenText.trim());
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
@@ -578,6 +718,15 @@ function SetupScreen({
           <p className="mt-1 text-xs text-muted">
             ローカルの Stockfish と対局します。指した対局はこの端末に履歴として保存され、
             あとから1手ずつ振り返れます。
+          </p>
+          {/* あなたのレート(ローカル内部レート)。レート戦の実績がまだ無くても初期値を見せて
+              「レートが動く体験」への期待を作る。 */}
+          <p className="mt-2 text-sm">
+            <span className="text-muted">あなたのレート: </span>
+            <span className="font-bold tabular-nums text-ai">{myRating.rating}</span>
+            <span className="ml-1 text-xs text-subtle">
+              {myRating.games > 0 ? `（レート戦 ${myRating.games} 局）` : '（初期値）'}
+            </span>
           </p>
         </div>
 
@@ -637,7 +786,40 @@ function SetupScreen({
                   {DIFFICULTY_ICONS[d.key] ?? '♟'}
                 </span>
                 <span className="text-sm font-semibold">{d.label}</span>
+                {/* 目安 Elo(オーナー要望): 数値があると強さの相場観が一目で伝わる。
+                    tabular-nums で桁ブレ防止。「~」で目安であることを明示。 */}
+                <span className="text-[11px] font-medium tabular-nums opacity-90">~{d.elo}</span>
                 <span className="mt-0.5 text-[10px] opacity-80">{d.desc}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* レート戦 / カジュアル切替(オーナー構想: カジュアルはレートが変動しない) */}
+        <div>
+          <p className="mb-2 text-xs font-medium text-muted">対局の種類</p>
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                { v: true, label: 'レート戦', desc: '勝敗でレートが動く' },
+                { v: false, label: 'カジュアル', desc: 'レート変動なし' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={String(opt.v)}
+                type="button"
+                onClick={() => onRatedChange(opt.v)}
+                aria-pressed={rated === opt.v}
+                className={[
+                  'focus-ai flex min-h-11 flex-col items-start justify-center rounded-lg border px-4 py-1',
+                  'motion-safe:transition-all motion-safe:duration-150',
+                  rated === opt.v
+                    ? 'border-ai bg-ai text-white shadow-btn dark:bg-ai-dim'
+                    : 'border-border text-muted hover:border-ai hover:text-ai',
+                ].join(' ')}
+              >
+                <span className="text-sm font-medium leading-tight">{opt.label}</span>
+                <span className="text-[10px] leading-tight opacity-80">{opt.desc}</span>
               </button>
             ))}
           </div>
@@ -657,6 +839,37 @@ function SetupScreen({
         >
           {engineLoading ? 'エンジン読み込み中…' : '対局開始'}
         </button>
+
+        {/* ── FEN から対局(Phase 2B: 詰将棋・練習問題・途中局面) ──
+            折りたたみで通常フローを邪魔しない。常にカジュアル(任意局面の有利不利が不明なため)。 */}
+        <details className="rounded-xl border border-border bg-surface p-3">
+          <summary className="focus-ai -m-1 cursor-pointer rounded p-1 text-xs font-medium text-muted">
+            局面(FEN)から対局する — 詰将棋・練習問題向け(カジュアル扱い)
+          </summary>
+          <div className="mt-2 flex flex-col gap-2">
+            <input
+              value={fenText}
+              onChange={(e) => setFenText(e.target.value)}
+              placeholder="例: 4k3/8/8/8/8/8/8/R3K3 w - - 0 1"
+              spellCheck={false}
+              aria-label="開始局面の FEN"
+              className="w-full rounded-lg border border-border bg-surface-2 px-2.5 py-2 font-mono text-xs text-on-surface placeholder:text-subtle focus:border-ai focus:outline-none"
+            />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onStartFromFen(fenText.trim())}
+                disabled={engineLoading || !fenLooksValid}
+                className="focus-ai min-h-9 rounded-lg border border-ai px-3 text-xs font-medium text-ai transition-colors hover:bg-ai-bg disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-ai-deep"
+              >
+                この局面から開始
+              </button>
+              <span className="text-[10px] text-subtle">
+                あなたは「その局面の手番側」を持ちます
+              </span>
+            </div>
+          </div>
+        </details>
       </section>
 
       {/* 履歴一覧 */}
@@ -779,12 +992,18 @@ function TurnIndicator({
 function ResultBanner({
   outcome,
   youColor,
+  ratingResult,
+  canReview,
   onReview,
   onRematch,
   onNewGame,
 }: {
   outcome: Extract<PlaySnapshot['outcome'], { over: true }>;
   youColor: PieceColor;
+  /** レート戦の変動結果。null = カジュアル(または待った使用でレート変動なし)。 */
+  ratingResult: { before: number; after: number; delta: number } | null;
+  /** 振り返り可能か(0手対局は棋譜が無く false)。 */
+  canReview: boolean;
   onReview: () => void;
   onRematch: () => void;
   onNewGame: () => void;
@@ -814,14 +1033,41 @@ function ResultBanner({
         <p className="text-lg font-bold text-on-surface">{title}</p>
       </div>
       <p className="text-xs text-muted">{REASON_LABEL[outcome.reason] ?? '終局'}</p>
+
+      {/* レート変動(レート戦のみ)。+は藍・−は柿(悪手と同系)・±0はミュート。
+          tabular-nums で数字の幅を固定し「1200 → 1216」の並びを綺麗に見せる。 */}
+      {ratingResult && (
+        <p className="mt-2 text-sm tabular-nums">
+          <span className="text-muted">レート </span>
+          <span className="font-semibold text-on-surface">{ratingResult.before}</span>
+          <span className="text-muted"> → </span>
+          <span className="font-bold text-on-surface">{ratingResult.after}</span>
+          <span
+            className={[
+              'ml-1.5 font-bold',
+              ratingResult.delta > 0
+                ? 'text-ai'
+                : ratingResult.delta < 0
+                  ? 'text-[var(--q-miss-fg)]'
+                  : 'text-muted',
+            ].join(' ')}
+          >
+            ({ratingResult.delta > 0 ? '+' : ''}
+            {ratingResult.delta})
+          </span>
+        </p>
+      )}
+
       <div className="mt-3 flex flex-col gap-2">
-        <button
-          type="button"
-          onClick={onReview}
-          className="focus-ai min-h-11 rounded-lg bg-ai px-4 text-sm font-semibold text-white transition-colors hover:bg-ai-hover dark:bg-ai-dim dark:hover:bg-ai"
-        >
-          この対局を振り返る
-        </button>
+        {canReview && (
+          <button
+            type="button"
+            onClick={onReview}
+            className="focus-ai min-h-11 rounded-lg bg-ai px-4 text-sm font-semibold text-white transition-colors hover:bg-ai-hover dark:bg-ai-dim dark:hover:bg-ai"
+          >
+            この対局を振り返る
+          </button>
+        )}
         <div className="flex gap-2">
           <button
             type="button"

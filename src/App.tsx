@@ -51,6 +51,14 @@ function App() {
     setMode('review');
   };
 
+  // レビューからの「この局面から対局」(Phase 2B): FEN を渡して対局へ切り替え。
+  // nonce で同一 FEN の再要求も発火させる(PlayView 側が nonce 変化で開始を検知)。
+  const [playFrom, setPlayFrom] = useState<{ fen: string; nonce: number } | null>(null);
+  const handlePlayFrom = (fen: string) => {
+    setPlayFrom((prev) => ({ fen, nonce: (prev?.nonce ?? 0) + 1 }));
+    setMode('play');
+  };
+
   // タブ切替。レビューを開いたら以降マウント状態を保つ。
   const switchMode = (m: Mode) => {
     if (m === 'review') setReviewMounted(true);
@@ -148,14 +156,19 @@ function App() {
       <main className="flex-1">
         {/* PlayView は常時マウント(対局中の状態をタブ切替で失わない)。 */}
         <div className={mode === 'play' ? '' : 'hidden'}>
-          <PlayView onReview={handleReview} />
+          <PlayView onReview={handleReview} playFrom={playFrom} />
         </div>
 
         {/* ReviewView は初回レビューまで遅延マウント。以降 hidden で状態保持。
             reviewKey を変えると再マウントされ initialPgn を最優先で読み込む。 */}
         {reviewMounted && (
           <div className={mode === 'review' ? '' : 'hidden'}>
-            <ReviewView key={reviewKey} initialPgn={reviewPgn} active={mode === 'review'} />
+            <ReviewView
+              key={reviewKey}
+              initialPgn={reviewPgn}
+              active={mode === 'review'}
+              onPlayFrom={handlePlayFrom}
+            />
           </div>
         )}
       </main>

@@ -86,7 +86,16 @@ const SHARE_MAX_PGN_CHARS = 5000;
 export function ReviewView({
   initialPgn,
   active = true,
-}: { initialPgn?: string; active?: boolean } = {}) {
+  onPlayFrom,
+}: {
+  initialPgn?: string;
+  active?: boolean;
+  /**
+   * 「この局面から対局」(Phase 2B)。現在表示中の局面 FEN を対局画面へ引き渡す。
+   * 未指定なら導線ボタン自体を出さない(単体利用やテストで PlayView が無い構成を壊さない)。
+   */
+  onPlayFrom?: (fen: string) => void;
+} = {}) {
   const [pgnText, setPgnText] = useState(initialPgn ?? SAMPLE_PGN);
   const [game, setGame] = useState<ChessGame | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -715,6 +724,20 @@ export function ReviewView({
             >
               ⇅
             </button>
+            {/* この局面から対局(Phase 2B・④「復習で再開」の実装)
+                現在表示中の局面 FEN を PlayView へ渡してカジュアル対局を開始する。
+                「悪手の場面から自分ならどう指すか試す」という復習ループの核。 */}
+            {onPlayFrom && (
+              <button
+                type="button"
+                onClick={() => game && onPlayFrom(game.fenAt(index))}
+                disabled={!game}
+                title="表示中の局面から AI と対局（カジュアル・あなたは手番側）"
+                className="focus-ai ml-1 min-h-11 rounded-lg border border-ai px-3 text-sm font-medium text-ai transition-colors hover:bg-ai-bg disabled:opacity-30 dark:border-ai-muted dark:text-ai-muted dark:hover:bg-ai-deep"
+              >
+                ▶ この局面から対局
+              </button>
+            )}
           </div>
 
           {/* 評価グラフ

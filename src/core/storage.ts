@@ -17,6 +17,7 @@
  *   "cj:ctx:<pgnHash>"  = 解析済みコンテキスト
  *   "cj:session"        = セッション(最終棋譜・レベル・向き・ヒント既読)
  *   "cj:games"          = 対局履歴(AI戦で指した対局のリスト・新しい順)
+ *   "cj:rating"         = ローカル内部レート(AI戦のレート戦で変動。Phase 2C でクラウド同期に昇格予定)
  */
 
 import type { ExplanationContext } from './types';
@@ -238,6 +239,63 @@ export function deserializePlayedGames(json: string): PlayedGame[] | null {
 export function appendPlayedGame(existing: PlayedGame[], game: PlayedGame): PlayedGame[] {
   // 新しい順(先頭が最新)。上限を超えたら末尾(古いもの)から捨てる。
   return [game, ...existing].slice(0, MAX_PLAYED_GAMES);
+}
+
+// ── ローカル内部レート(AI戦) ─────────────────────────────────
+
+/** レート保存キー。 */
+const RATING_KEY = 'cj:rating';
+
+/**
+ * ローカルレートの保存データ。
+ * WHY games(レート戦の対局数)も持つか: 将来「⚡レート確定まであとN局」的な表示や、
+ * Phase 2C のクラウド移行時に「このローカルレートは何局分の実績か」を判断する材料になる。
+ */
+export interface RatingData {
+  rating: number;
+  /** レート戦としてカウントした対局数。 */
+  games: number;
+}
+
+/** レートを バージョン付き JSON にシリアライズ(純関数)。 */
+export function serializeRating(data: RatingData): string {
+  return JSON.stringify({ version: SCHEMA_VERSION, ...data });
+}
+
+/** JSON からレートをデシリアライズ(純関数)。破損・不正は null(呼び出し側が初期値を使う)。 */
+export function deserializeRating(json: string): RatingData | null {
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const p = parsed as Record<string, unknown>;
+    if (p['version'] !== SCHEMA_VERSION) return null;
+    // 有限数のみ許可(NaN/Infinity/文字列の混入で表示や Elo 計算が壊れるのを防ぐ)
+    if (typeof p['rating'] !== 'number' || !Number.isFinite(p['rating'])) return null;
+    if (typeof p['games'] !== 'number' || !Number.isFinite(p['games'])) return null;
+    return { rating: p['rating'], games: p['games'] };
+  } catch {
+    return null;
+  }
+}
+
+/** localStorage からレートを読む。無し・破損は null(呼び出し側が INITIAL_RATING で初期化)。 */
+export function loadRating(): RatingData | null {
+  try {
+    const json = localStorage.getItem(RATING_KEY);
+    if (!json) return null;
+    return deserializeRating(json);
+  } catch {
+    return null;
+  }
+}
+
+/** レートを保存。書き込み失敗(Quota等)は握る(次回起動で古い値に戻るだけで事故にならない)。 */
+export function saveRating(data: RatingData): void {
+  try {
+    localStorage.setItem(RATING_KEY, serializeRating(data));
+  } catch {
+    // QuotaExceeded / SecurityError → 無視
+  }
 }
 
 // ── 共有URL エンコード/デコード ──────────────────────────────────

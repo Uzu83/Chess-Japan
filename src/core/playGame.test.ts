@@ -184,3 +184,37 @@ describe('opposite', () => {
     expect(opposite('black')).toBe('white');
   });
 });
+
+describe('PlayGame — カスタム開始局面(Phase 2B)', () => {
+  // 1.e4 e5 の後の局面から対局を始めるケース。
+  // アンパッサン欄は '-'(chess.js は「実際に取れない ep」を '-' に正規化するため、
+  // 'e6' と書くと fen 往復で不一致になる — 正規形で書くのが正解)。
+  const MID_FEN = 'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2';
+
+  it('startFen から開始でき、手番が FEN 通りになる', () => {
+    const g = new PlayGame(MID_FEN);
+    expect(g.turn).toBe('white');
+    expect(g.fen).toBe(MID_FEN);
+  });
+
+  it('PGN に SetUp/FEN ヘッダが付き、ChessGame.fromPgn で振り返れる(往復)', async () => {
+    const g = new PlayGame(MID_FEN);
+    g.move('g1', 'f3');
+    g.move('b8', 'c6');
+    const pgn = g.pgn({ Event: 'AI 戦' });
+    expect(pgn).toContain('[SetUp "1"]');
+    expect(pgn).toContain(`[FEN "${MID_FEN}"]`);
+    // 振り返り側(ChessGame)が正しくカスタム開始局面として読めること
+    const { ChessGame } = await import('./game');
+    const review = ChessGame.fromPgn(pgn);
+    expect(review.startFen).toBe(MID_FEN);
+    expect(review.moves[0].san).toBe('Nf3');
+  });
+
+  it('標準初期配置を明示的に渡しても SetUp/FEN ヘッダは付かない', () => {
+    const g = new PlayGame('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
+    g.move('e2', 'e4');
+    const pgn = g.pgn();
+    expect(pgn).not.toContain('[SetUp');
+  });
+});

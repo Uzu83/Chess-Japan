@@ -13,8 +13,11 @@ import {
   savePlayedGame,
   loadPlayedGames,
   deletePlayedGame,
+  serializeRating,
+  deserializeRating,
   type SessionData,
   type PlayedGame,
+  type RatingData,
 } from './storage';
 import type { ExplanationContext } from './types';
 
@@ -334,5 +337,23 @@ describe('savePlayedGame / loadPlayedGames / deletePlayedGame (localStorage)', (
     const after = deletePlayedGame('drop');
     expect(after.map((g) => g.id)).toEqual(['keep']);
     expect(loadPlayedGames().map((g) => g.id)).toEqual(['keep']);
+  });
+});
+
+// ── ローカル内部レート(RatingData) ───────────────────────────
+
+describe('serializeRating / deserializeRating', () => {
+  it('ラウンドトリップできる', () => {
+    const data: RatingData = { rating: 1216, games: 3 };
+    expect(deserializeRating(serializeRating(data))).toEqual(data);
+  });
+
+  it('バージョン不一致・破損・非有限数は null', () => {
+    expect(deserializeRating(JSON.stringify({ version: 99, rating: 1200, games: 0 }))).toBeNull();
+    expect(deserializeRating('{{{')).toBeNull();
+    expect(deserializeRating(JSON.stringify({ version: 1, rating: 'high', games: 0 }))).toBeNull();
+    expect(
+      deserializeRating(JSON.stringify({ version: 1, rating: Infinity, games: 0 })),
+    ).toBeNull();
   });
 });
