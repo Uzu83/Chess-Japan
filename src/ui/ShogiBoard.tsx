@@ -63,14 +63,28 @@ function usiToLastDests(usi: string | null | undefined): Key[] {
   return [];
 }
 
-/** 現在の props から shogiground 設定を組む（初期化・更新で共用）。 */
-function buildConfig(props: ShogiBoardProps): Config {
+/**
+ * 現在の props から shogiground 設定を組む（初期化・更新で共用）。
+ * export している理由: 見た目バグ(scaleDownPieces)の回帰を単体テストで固定するため
+ * （ShogiBoard.config.test.ts）。jsdom はレイアウトを計算しないので描画自体はテストできないが、
+ * 「設定値が正しいこと」だけは pure 関数として検証できる。
+ */
+export function buildConfig(props: ShogiBoardProps): Config {
   const orientation = props.orientation ?? 'white';
   const { board, hands, turn } = splitSfen(props.sfen);
   return {
     sfen: { board, hands },
     turnColor: turn,
     orientation: toSgColor(orientation),
+    // 【CRITICAL・見た目バグ再発防止 / 2026-07-08 本番で発覚】必ず false。
+    //   shogiground のデフォルトは scaleDownPieces:true（公式サンプルは駒スプライトを 2マス幅で
+    //   用意し scale(0.5) で 1マスに収める前提）。true だと駒 transform が
+    //   `translate(n*50%,..) scale(0.5)` になり translate も半分刻みになる。
+    //   本プロジェクトの shogiBoard.css は駒を 1マス幅(width:11.111%)の漢字グリフで描くため、
+    //   true のままだと駒が半分サイズ＋半分刻みで盤の左上 1/4 に凝縮される
+    //   （Phase 4-1 から潜伏。棋譜/手番は正常なので状態検証では気づけず getBoundingClientRect で判明）。
+    //   CSS の「translate 100%=1マス」前提と対で必須。ShogiPlayBoard.tsx にも同じ設定あり。
+    scaleDownPieces: false,
     // 閲覧専用: 操作・ドラッグ・描画レイヤを無効化（軽量化＆誤操作防止）。
     viewOnly: true,
     coordinates: { enabled: false },

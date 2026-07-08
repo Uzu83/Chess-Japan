@@ -124,13 +124,26 @@ export function ShogiPlayBoard({
       sfen: { board, hands },
       turnColor: turnColor as Color,
       orientation: orientation as Color,
+      // 【CRITICAL・見た目バグ再発防止 / 2026-07-08 本番で発覚】必ず false。詳細は ShogiBoard.tsx の
+      //   同設定コメント参照。要約: shogiground デフォルト scaleDownPieces:true は駒スプライト 2マス幅
+      //   前提で、駒を scale(0.5)+translate 半分刻みにする。本プロジェクトの shogiBoard.css は駒を
+      //   1マス幅の漢字グリフで描くので、true だと駒が半サイズで盤左上に凝縮される。CSS の
+      //   「translate 100%=1マス」前提と対で必須。ここは操作盤なので drag プレビュー(drag.js)も
+      //   同フラグ参照 → false で操作中の駒サイズも正しくなる。
+      scaleDownPieces: false,
       // 人間の手番のみ操作可能な色を渡す。ロック時(undefined)は盤も駒台も動かせない。
       activeColor: movable ? (turnColor as Color) : undefined,
       checks: inCheck ? (turnColor as Color) : false,
       lastDests: usiToLastDests(lastMoveUsi),
       highlight: { lastDests: true, check: true },
       hands: { inlined: true },
-      coordinates: { enabled: true },
+      // 【2026-07-08 修正】false。shogiground は coords.ranks/files を生成するが、本プロジェクトの
+      //   shogiBoard.css は座標の配置スタイルを持たない（閲覧盤 ShogiBoard は座標 disabled のため
+      //   未整備）。true のままだと座標が position:static で盤左上に「987654321…」と積み上がって
+      //   駒に重なる（scaleDownPieces バグ修正後に顕在化）。閲覧盤と一貫させて無効化。
+      //   棋譜パネルが日本語表記(☗７六歩)を出すので盤上座標は必須でない。
+      //   将来スタイル付き座標が欲しくなったら shogiBoard.css に coords 配置を足して true に戻す。
+      coordinates: { enabled: false },
       animation: { enabled: true, duration: 200 },
       draggable: { enabled: true, showGhost: true },
       selectable: { enabled: true },
