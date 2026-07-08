@@ -47,7 +47,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
@@ -67,7 +67,7 @@ jobs:
       # SARIF を Security タブに upload するのに必要
       security-events: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
@@ -89,7 +89,7 @@ jobs:
       # SARIF を Security タブに upload するのに必要
       security-events: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # 【バージョン選定の地雷 2 つ（2026-07-08 実測）。下げる前にここを読むこと】
       # 1. タグは v プレフィックス付き（「0.33.1」のような v なし表記は存在しないタグで解決エラー）。
       # 2. v0.35.0 未満は GHSA-69fq-xp46-6x23（Trivy エコシステムのサプライチェーン侵害・
