@@ -81,13 +81,18 @@ if (vulns.CRITICAL > 0) blockers.push(`CRITICAL 脆弱性 ${vulns.CRITICAL} 件`
 
 // --- 3. Secret (gitleaks SARIF + Trivy secrets) --------------------------------
 // CI はリポジトリ直下、ローカル security-scan.sh は artifacts/secret/ に吐くため両方見る。
+// 【Codex ゲート② F001 で修正済み・breakを戻さないこと】以前は最初に見つかった SARIF で
+// break していたが、それだと「古い clean な artifacts 側 SARIF が残った状態で root 側に
+// 検出入りの SARIF がある」ケースで root 側が無視され、絶対ブロックが発火しない
+// fail-open になる。secret は絶対ブロック条件なので全 SARIF を合算する。
+// 同一検出が両方に載って二重カウントされうるが、ブロック判定は >0 の閾値なので
+// 過大カウントは安全側（fail-safe）— de-dup の複雑さより単純さを取る。
 let secretCount = secretsFromTrivy;
 for (const p of ['artifacts/secret/gitleaks.sarif', 'gitleaks.sarif']) {
   const raw = readIf(p);
   if (raw) {
     const sarif = JSON.parse(raw);
     for (const run of sarif.runs ?? []) secretCount += (run.results ?? []).length;
-    break;
   }
 }
 if (secretCount > 0) blockers.push(`Secret 検出 ${secretCount} 件（絶対ブロック）`);
