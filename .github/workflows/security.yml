@@ -90,9 +90,14 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v6
-      # 注: trivy-action のタグは v プレフィックス付き（v0.33.1）。テンプレの「0.33.1」は
-      # 存在しないタグで CI が解決エラーになる（2026-07-08 に gh api で実在確認済み）。
-      - uses: aquasecurity/trivy-action@v0.33.1
+      # 【バージョン選定の地雷 2 つ（2026-07-08 実測）。下げる前にここを読むこと】
+      # 1. タグは v プレフィックス付き。テンプレの「0.33.1」は存在しないタグで解決エラー。
+      # 2. v0.35.0 未満は GHSA-69fq-xp46-6x23（Trivy エコシステムのサプライチェーン侵害・
+      #    critical）の脆弱範囲。実際にこの PR の初回 CI で dependency-review 自身が
+      #    v0.33.1 の導入をブロックした（ゲートの初仕事）。v0.35.0 未満へ戻さないこと。
+      #    trivy 本体も 0.69.4 だけが侵害版 — version 入力で明示指定する場合は避ける
+      #    （v0.36.0 の既定は v0.70.0 で安全、内部の setup-trivy もパッチ済み v0.2.6）。
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           format: sarif
@@ -101,11 +106,11 @@ jobs:
           ignore-unfixed: true
       # JSON(集計用) と SBOM は SARIF と別フォーマットなので action を追加実行する。
       # 以前は docker run aquasec/trivy:latest で生成していたが、Trivy 本体が未ピンになり
-      # SARIF 側（v0.33.1 が入れる版）と結果がズレうるため、同じ pinned action に統一した。
+      # SARIF 側（pinned action が入れる版）と結果がズレうるため、同じ pinned action に統一した。
       - name: Prepare artifact dirs
         run: mkdir -p artifacts/sca artifacts/sbom
       - name: Trivy JSON (build-review-packet 集計用)
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           format: json
@@ -113,7 +118,7 @@ jobs:
           scanners: vuln,misconfig,secret
           ignore-unfixed: true
       - name: Trivy SBOM (CycloneDX)
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           format: cyclonedx
