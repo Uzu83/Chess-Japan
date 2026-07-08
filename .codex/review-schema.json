@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "codex-review-output",
+  "description": "Codex レビューの構造化出力。evidence discipline を schema で強制する: 証拠フィールドを required にし additionalProperties:false で締めることで『散文の自己申告』を構造的に排除する（projects/CLAUDE.md オーケストレーション規律と同じ思想）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "risk_level", "findings"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "レビュー全体の要約（3文以内。人間向け decision packet に転記される）"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "severity",
+          "title",
+          "file",
+          "line",
+          "claim",
+          "evidence",
+          "failure_scenario",
+          "confidence",
+          "suggested_fix"
+        ],
+        "properties": {
+          "id": { "type": "string", "description": "F001 形式。裁定 JSON がこの id を参照する" },
+          "severity": { "type": "string", "enum": ["info", "low", "medium", "high", "critical"] },
+          "title": { "type": "string" },
+          "file": {
+            "type": "string",
+            "description": "リポジトリルートからの相対パス。不正確なら裁定で reject される"
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "行番号。特定できない場合は 0 とし claim 内で範囲を示す"
+          },
+          "claim": {
+            "type": "string",
+            "description": "何が問題か（1つの主張のみ。複数あるなら finding を分ける）"
+          },
+          "evidence": {
+            "type": "string",
+            "description": "根拠となるコード断片や依存関係。secret を含む場合は AKIA**** 形式にマスクすること（raw secret を出力に載せない）"
+          },
+          "failure_scenario": {
+            "type": "string",
+            "description": "この問題が実際に発火する具体的なシナリオ。書けない finding は speculative として裁定側で defer される"
+          },
+          "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+          "suggested_fix": {
+            "type": "string",
+            "description": "1〜3行の修正方針。diff 全文は不要"
+          }
+        }
+      }
+    }
+  }
+}

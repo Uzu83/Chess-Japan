@@ -39,7 +39,23 @@ jobs:
         run: npm run format:check
 
       - name: Test
-        run: npm run test
+        # JUnit XML の出力先 artifacts/test/junit.xml は scripts/build-review-packet.mjs が
+        # 読む契約パス（artifacts/test/*.xml）に合わせている。ここを変えるとレビューパケットが
+        # テスト結果を拾えなくなるので変更しない。
+        # vitest 3.x の構文: reporter を複数指定し、--outputFile.junit=<path> で junit reporter
+        # だけの出力先をドット記法で指定する（--outputFile 単体だと全 reporter に効いて
+        # コンソール出力まで壊れる）。--reporter=default を残すのは CI ログで人間/AI が
+        # 失敗テストを直接読めるようにするため。出力ディレクトリは vitest が自動作成する。
+        run: npm run test -- --reporter=default --reporter=junit --outputFile.junit=artifacts/test/junit.xml
+
+      - name: Upload test results (JUnit XML)
+        # if: always() — テストが失敗した時こそ junit.xml が必要（失敗の内訳を
+        # レビューパケット側で読むため）。成功時のみアップロードでは意味が半減する。
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: artifacts/test/junit.xml
 
       - name: Build
         run: npm run build

@@ -1,0 +1,25 @@
+# CodeQL 設定（/dev-secure scope:security が .github/codeql/ に配置）
+#
+# security-and-quality = 既定のセキュリティクエリ + 品質クエリ。
+# security-extended へ広げるのは auth/決済を持つ repo だけにする
+# （extended は精度がわずかに下がり誤検知が増える方向のため、
+#   ノイズ耐性のない 1 人開発では既定+品質が損益分岐点）。
+name: 'repo-codeql'
+queries:
+  - uses: security-and-quality
+# 一次ソースだけを対象にする（テンプレは paths-ignore のみだが、このリポジトリは
+# 自作コードの置き場が src/（Vite+React SPA）と supabase/functions/（Deno Edge
+# Functions）の 2 箇所に確定しているため、paths で正面から絞る方が確実）。
+paths:
+  - src
+  - supabase/functions
+paths-ignore:
+  # 生成物・依存はスキャン対象外。ここを削ると解析時間が数倍になるうえ
+  # 自分が書いていないコードの指摘でノイズが埋まる。
+  - '**/node_modules/**'
+  - '**/dist/**'
+  - '**/coverage/**'
+  # scripts/copy-engine.mjs が node_modules → public/engine/ へ Stockfish WASM を
+  # コピーする構成（.gitignore 済みだが、ビルド後の環境では存在しうる）。
+  # コピーされた生成物 = 自作コードではないのでスキャンしない。
+  - 'public/engine/**'

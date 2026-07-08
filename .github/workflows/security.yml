@@ -1,0 +1,134 @@
+# ============================================================================
+# security.yml — SAST / SCA / SBOM パイプライン（/dev-secure scope:security が導入）
+#
+# 役割分担（単一ツール万能主義を取らない。出典: AI駆動開発環境リサーチ）:
+# - CodeQL   = 深い SAST（semantic 解析）。JS/TS のみに絞って時間を節約。
+# - Trivy    = SCA(依存脆弱性) + misconfig + secret + SBOM 生成の基盤。
+#              コードグラフ解析をしないため exploitability は判定できない。
+#              到達不能な指摘は .trivyignore に「理由コメント付き」で追加する
+#              （理由なし抑制は禁止 — 監査時に無根拠 ignore は全部剥がされる）。
+# - Dependency Review = PR で新規導入される依存の脆弱性ゲート。
+#
+# テンプレからの読み替え（このリポジトリ固有の判断。消す前にここを読むこと）:
+# - gitleaks job は含めない: ci.yml の secret-scan job（gitleaks/gitleaks-action@v2・
+#   fetch-depth:0 の履歴込み走査）が既に同じ役割を担っており、二重実行は CI 時間と
+#   アラートの重複を生むだけ。「一次防衛 = GitHub Push Protection、バックストップ =
+#   gitleaks（ci.yml 側）」という分担自体は変えていない。ci.yml から secret-scan を
+#   消す時は、この workflow に gitleaks job を戻すこと（secret 検出を無防備にしない）。
+# - attest 系（attest-sbom job と attestations/id-token permission）は今回見送り。
+#   導入する時は job 追加と合わせて permission も足すこと。
+#
+# PR は軽く・スケジュールで深く: PR時は差分依存+fs スキャン、nightly で
+# 全量再スキャン（新規CVEは「コードが変わらなくても」湧くため定期実行が必須）。
+# ============================================================================
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # 02:25 UTC = 11:25 JST。00分台はGitHub全体で混むので分をずらしてある。
+    - cron: '25 2 * * *'
+
+# permissions はテンプレの workflow 全体指定から job 単位の必要最小へ変更。
+# attest 系を外したことで attestations/id-token が不要になり、
+# security-events: write も SARIF を上げる job（codeql / trivy）だけに絞れるため。
+
+jobs:
+  # --------------------------------------------------------------------------
+  # 新規依存の脆弱性ゲート。PR 限定（push には差分概念がないため）。
+  # fail-on-severity: high — critical/high の依存導入はマージ不可。
+  # medium 以下は通すが Trivy nightly が拾い続ける、という二段構え。
+  # --------------------------------------------------------------------------
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  # --------------------------------------------------------------------------
+  # CodeQL。language は実スタックに合わせて絞ること（/dev-secure が調整）。
+  # このリポジトリは Vite+React SPA + Deno Edge Functions で JS/TS のみなので
+  # javascript-typescript 単独。対象パスは .github/codeql/codeql-config.yml 側で
+  # src / supabase/functions に絞ってある（生成物スキャン防止）。
+  # クエリスイートは security-and-quality（既定+品質）。security-extended は
+  # 誤検知が増える方向なので、auth/決済など危険領域を持つ repo だけで検討。
+  # --------------------------------------------------------------------------
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # SARIF を Security タブに upload するのに必要
+      security-events: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          config-file: .github/codeql/codeql-config.yml
+      - uses: github/codeql-action/analyze@v4
+
+  # --------------------------------------------------------------------------
+  # Trivy: fs スキャン（vuln + misconfig + secret）と SBOM 生成を同一 job で。
+  # SARIF は Security タブへ、JSON と SBOM は artifacts へ。
+  # 出力パス（artifacts/sca, artifacts/sbom）はローカルの scripts/security-scan.sh と
+  # 揃えてある — 片方を変えたら両方変える（「CIだけ赤い」の慢性化防止）。
+  # ignore-unfixed: true — fix が存在しない CVE で PR を赤くしても
+  # アクションが取れずアラート疲れを生むだけ。nightly の全量ログには残る。
+  # --------------------------------------------------------------------------
+  trivy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # SARIF を Security タブに upload するのに必要
+      security-events: write
+    steps:
+      - uses: actions/checkout@v6
+      # 注: trivy-action のタグは v プレフィックス付き（v0.33.1）。テンプレの「0.33.1」は
+      # 存在しないタグで CI が解決エラーになる（2026-07-08 に gh api で実在確認済み）。
+      - uses: aquasecurity/trivy-action@v0.33.1
+        with:
+          scan-type: fs
+          format: sarif
+          output: trivy-fs.sarif
+          scanners: vuln,misconfig,secret
+          ignore-unfixed: true
+      # JSON(集計用) と SBOM は SARIF と別フォーマットなので action を追加実行する。
+      # 以前は docker run aquasec/trivy:latest で生成していたが、Trivy 本体が未ピンになり
+      # SARIF 側（v0.33.1 が入れる版）と結果がズレうるため、同じ pinned action に統一した。
+      - name: Prepare artifact dirs
+        run: mkdir -p artifacts/sca artifacts/sbom
+      - name: Trivy JSON (build-review-packet 集計用)
+        uses: aquasecurity/trivy-action@v0.33.1
+        with:
+          scan-type: fs
+          format: json
+          output: artifacts/sca/trivy-fs.json
+          scanners: vuln,misconfig,secret
+          ignore-unfixed: true
+      - name: Trivy SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@v0.33.1
+        with:
+          scan-type: fs
+          format: cyclonedx
+          output: artifacts/sbom/repo.cdx.json
+      - uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-artifacts
+          path: |
+            trivy-fs.sarif
+            artifacts/sca/trivy-fs.json
+            artifacts/sbom/repo.cdx.json
+          retention-days: 90
