@@ -1,8 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Shogiground } from 'shogiground';
 import type { Api } from 'shogiground/api';
-import type { Config } from 'shogiground/config';
-import type { Color, Key } from 'shogiground/types';
+import { buildShogiReviewConfig, type ShogiReviewConfigParams } from './shogigroundConfig';
 import './shogiBoard.css';
 
 /*
@@ -16,71 +15,11 @@ import './shogiBoard.css';
  *   盤コンポーネントを毎レンダーで作り直すと重い＆アニメーションが飛ぶ。初期化は 1 回だけ行い、
  *   以降は SFEN / 向き / 直前手の変化を api.set() の差分で反映する（chessground 版と実装方針を統一）。
  *
- * 入力は SFEN（"lnsg... b - 1"）。盤面・持ち駒・手番を SFEN から切り出して shogiground に渡す。
+ * 入力は SFEN（"lnsg... b - 1"）。config の組み立て（見た目不変条件・SFEN 分解・直前手変換）は
+ * shogigroundConfig.ts の buildShogiReviewConfig に集約（両盤共有・単体テスト対象）。
  */
 
-interface ShogiBoardProps {
-  /** 表示する局面（SFEN）。 */
-  sfen: string;
-  /** 盤の向き。'white'=先手が下（既定）/ 'black'=後手が下。chess UI と語彙を合わせる。 */
-  orientation?: 'white' | 'black';
-  /** 直前の手（USI、例 "7g7f" / 打ちは "P*5e" / 成りは "7g7f+"）。ハイライトに使う。 */
-  lastMoveUsi?: string | null;
-}
-
-/** chess UI の 'white'|'black' を shogiground の手番色に写す（先手=sente が下＝白相当）。 */
-function toSgColor(orientation: 'white' | 'black'): Color {
-  return orientation === 'black' ? 'gote' : 'sente';
-}
-
-/** SFEN 文字列を shogiground が要求する {board, hands, turn} に分解する。 */
-function splitSfen(sfen: string): { board: string; hands: string; turn: Color } {
-  const tokens = sfen.trim().split(/\s+/);
-  const board = tokens[0] ?? '';
-  // SFEN 手番トークン: 'b'=先手(sente) / 'w'=後手(gote)。
-  const turn: Color = tokens[1] === 'w' ? 'gote' : 'sente';
-  // 持ち駒トークン。'-'（持ち駒なし）はそのまま渡してよい（shogiground は非駒文字を読み飛ばす）。
-  const hands = tokens[2] ?? '-';
-  return { board, hands, turn };
-}
-
-/**
- * USI 手を直前手ハイライト用の Key 配列に変換する。
- * - 通常手 "7g7f"  → ['7g','7f']（移動元・移動先）
- * - 成り   "7g7f+" → ['7g','7f']（末尾 '+' は無視）
- * - 打ち   "P*5e"  → ['5e']（打った先のみ。持ち駒からなので移動元マス無し）
- */
-function usiToLastDests(usi: string | null | undefined): Key[] {
-  if (!usi) return [];
-  if (usi.includes('*')) {
-    // 打ち: '*' の後ろ 2 文字が打った先。
-    const dest = usi.slice(usi.indexOf('*') + 1, usi.indexOf('*') + 3);
-    return dest.length === 2 ? [dest as Key] : [];
-  }
-  if (usi.length >= 4) {
-    return [usi.slice(0, 2) as Key, usi.slice(2, 4) as Key];
-  }
-  return [];
-}
-
-/** 現在の props から shogiground 設定を組む（初期化・更新で共用）。 */
-function buildConfig(props: ShogiBoardProps): Config {
-  const orientation = props.orientation ?? 'white';
-  const { board, hands, turn } = splitSfen(props.sfen);
-  return {
-    sfen: { board, hands },
-    turnColor: turn,
-    orientation: toSgColor(orientation),
-    // 閲覧専用: 操作・ドラッグ・描画レイヤを無効化（軽量化＆誤操作防止）。
-    viewOnly: true,
-    coordinates: { enabled: false },
-    // 持ち駒を盤の上下にインラインで表示（別 DOM を渡さず shogiground に生成させる）。
-    hands: { inlined: true },
-    lastDests: usiToLastDests(props.lastMoveUsi),
-    highlight: { lastDests: true },
-    drawable: { enabled: false, visible: false },
-  };
-}
+type ShogiBoardProps = ShogiReviewConfigParams;
 
 /** shogiground を React でラップした閲覧用の将棋盤（レスポンシブ・持ち駒つき）。 */
 export function ShogiBoard(props: ShogiBoardProps) {
@@ -90,7 +29,7 @@ export function ShogiBoard(props: ShogiBoardProps) {
   useEffect(() => {
     if (!elRef.current) return;
     // wrapElements.board に div を渡すと、この div が .sg-wrap になり内部に盤・持ち駒が生える。
-    apiRef.current = Shogiground(buildConfig(props), { board: elRef.current });
+    apiRef.current = Shogiground(buildShogiReviewConfig(props), { board: elRef.current });
     return () => {
       apiRef.current?.destroy();
       apiRef.current = null;
@@ -100,7 +39,7 @@ export function ShogiBoard(props: ShogiBoardProps) {
   }, []);
 
   useEffect(() => {
-    apiRef.current?.set(buildConfig(props));
+    apiRef.current?.set(buildShogiReviewConfig(props));
     // props（sfen/orientation/lastMoveUsi）変化のたびに差分反映。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.sfen, props.orientation, props.lastMoveUsi]);
