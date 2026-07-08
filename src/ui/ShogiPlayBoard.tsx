@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Shogiground } from 'shogiground';
 import type { Api } from 'shogiground/api';
 import type { Config } from 'shogiground/config';
-import type { Color, DropDests, Key, MoveDests, PieceName } from 'shogiground/types';
+import type { Color } from 'shogiground/types';
 import type { ShogiColor } from '../core/shogiPlayGame';
+import { buildShogiPlayConfig, splitSfenBoardHands } from './shogigroundConfig';
 import './shogiBoard.css';
 
 /*
@@ -59,35 +60,6 @@ interface ShogiPlayBoardProps {
   onUserDrop: (role: string, to: string) => void;
 }
 
-/**
- * USI 手を直前手ハイライト用の Key 配列へ変換する（ShogiBoard.tsx と同一ロジック）。
- * 通常手 "7g7f"→['7g','7f'] / 成り "7g7f+"→['7g','7f'] / 打ち "P*5e"→['5e']。
- */
-function usiToLastDests(usi: string | null | undefined): Key[] {
-  if (!usi) return [];
-  if (usi.includes('*')) {
-    const dest = usi.slice(usi.indexOf('*') + 1, usi.indexOf('*') + 3);
-    return dest.length === 2 ? [dest as Key] : [];
-  }
-  if (usi.length >= 4) return [usi.slice(0, 2) as Key, usi.slice(2, 4) as Key];
-  return [];
-}
-
-/** SFEN を shogiground が要求する {board, hands, turn} に分解する（ShogiBoard.tsx と同一）。 */
-function splitSfen(sfen: string): { board: string; hands: string } {
-  const tokens = sfen.trim().split(/\s+/);
-  return { board: tokens[0] ?? '', hands: tokens[2] ?? '-' };
-}
-
-/** dropDests(role→to[]) を shogiground の DropDests(`${color} ${role}`→Key[]) へ変換する。 */
-function toDropDests(dropDests: Map<string, string[]>, color: ShogiColor): DropDests {
-  const out: DropDests = new Map();
-  for (const [role, tos] of dropDests) {
-    out.set(`${color} ${role}` as PieceName, tos as Key[]);
-  }
-  return out;
-}
-
 export function ShogiPlayBoard({
   sfen,
   orientation,
@@ -116,81 +88,33 @@ export function ShogiPlayBoard({
   const onUserDropRef = useRef(onUserDrop);
   onUserDropRef.current = onUserDrop;
 
-  // 現在 props から shogiground 設定を組む（初期化・更新で共用）。
-  // ※ events は初期化時のみ渡す（set で毎回上書きすると多重登録の懸念があるため）。
-  const buildConfig = (withEvents: boolean): Config => {
-    const { board, hands } = splitSfen(sfen);
-    const cfg: Config = {
-      sfen: { board, hands },
-      turnColor: turnColor as Color,
-      orientation: orientation as Color,
-      // 【CRITICAL・見た目バグ再発防止 / 2026-07-08 本番で発覚】必ず false。詳細は ShogiBoard.tsx の
-      //   同設定コメント参照。要約: shogiground デフォルト scaleDownPieces:true は駒スプライト 2マス幅
-      //   前提で、駒を scale(0.5)+translate 半分刻みにする。本プロジェクトの shogiBoard.css は駒を
-      //   1マス幅の漢字グリフで描くので、true だと駒が半サイズで盤左上に凝縮される。CSS の
-      //   「translate 100%=1マス」前提と対で必須。ここは操作盤なので drag プレビュー(drag.js)も
-      //   同フラグ参照 → false で操作中の駒サイズも正しくなる。
-      scaleDownPieces: false,
-      // 人間の手番のみ操作可能な色を渡す。ロック時(undefined)は盤も駒台も動かせない。
-      activeColor: movable ? (turnColor as Color) : undefined,
-      checks: inCheck ? (turnColor as Color) : false,
-      lastDests: usiToLastDests(lastMoveUsi),
-      highlight: { lastDests: true, check: true },
-      hands: { inlined: true },
-      // 【2026-07-08 修正】false。shogiground は coords.ranks/files を生成するが、本プロジェクトの
-      //   shogiBoard.css は座標の配置スタイルを持たない（閲覧盤 ShogiBoard は座標 disabled のため
-      //   未整備）。true のままだと座標が position:static で盤左上に「987654321…」と積み上がって
-      //   駒に重なる（scaleDownPieces バグ修正後に顕在化）。閲覧盤と一貫させて無効化。
-      //   棋譜パネルが日本語表記(☗７六歩)を出すので盤上座標は必須でない。
-      //   将来スタイル付き座標が欲しくなったら shogiBoard.css に coords 配置を足して true に戻す。
-      coordinates: { enabled: false },
-      animation: { enabled: true, duration: 200 },
-      draggable: { enabled: true, showGhost: true },
-      selectable: { enabled: true },
-      movable: {
-        free: false, // 合法手のみ
-        dests: legalDests as MoveDests,
-        showDests: true,
-        ...(withEvents
-          ? {
-              events: {
-                after: (orig: Key, dest: Key) => {
-                  const from = orig as string;
-                  const to = dest as string;
-                  // 成り/不成の選択が要るならピッカーを出す。強制成り・不成不要は即着手を確定
-                  // （promote 未指定で core が自動成り/不成を決める）。
-                  if (needsPromoRef.current(from, to)) setPending({ from, to });
-                  else onUserMoveRef.current(from, to);
-                },
-              },
-            }
-          : {}),
+  // 現在 props から shogiground 設定を組む（初期化・更新で共用）。設定の中身は module-level の
+  // pure 関数 buildShogiPlayConfig に切り出し（テスト可能化・見た目不変条件の回帰ガード）、
+  // ここでは event body（ref 越しに最新コールバックを呼ぶ = stale closure 回避）だけ与える。
+  // ※ events は初期化時のみ渡す（set で毎回上書きすると多重登録の懸念があるため withEvents で制御）。
+  const buildConfig = (withEvents: boolean): Config =>
+    buildShogiPlayConfig({
+      sfen,
+      orientation,
+      turnColor,
+      inCheck,
+      lastMoveUsi,
+      legalDests,
+      dropDests,
+      movable,
+      withEvents,
+      onMoveAfter: (orig, dest) => {
+        const from = orig as string;
+        const to = dest as string;
+        // 成り/不成の選択が要るならピッカーを出す。強制成り・不成不要は即着手を確定
+        // （promote 未指定で core が自動成り/不成を決める）。
+        if (needsPromoRef.current(from, to)) setPending({ from, to });
+        else onUserMoveRef.current(from, to);
       },
-      droppable: {
-        free: false, // 合法な打ちのみ
-        dests: toDropDests(dropDests, turnColor),
-        showDests: true,
-        ...(withEvents
-          ? {
-              events: {
-                after: (piece: { role: string }, key: Key) => {
-                  onUserDropRef.current(piece.role, key as string);
-                },
-              },
-            }
-          : {}),
+      onDropAfter: (piece, key) => {
+        onUserDropRef.current(piece.role, key as string);
       },
-      // 内蔵の成りダイアログは使わない（自前ピッカーへ統一）。全経路で成りを自動発火させない。
-      promotion: {
-        movePromotionDialog: () => false,
-        forceMovePromotion: () => false,
-        dropPromotionDialog: () => false,
-        forceDropPromotion: () => false,
-      },
-      drawable: { enabled: false, visible: false },
-    };
-    return cfg;
-  };
+    });
 
   // ── 初期化（一度だけ） ─────────────────────────────────────
   useEffect(() => {
@@ -218,7 +142,7 @@ export function ShogiPlayBoard({
   // 成りをキャンセルしたら、着手前 sfen で盤を元に戻す（shogiground の楽観移動を巻き戻す）。
   const cancelPromotion = () => {
     setPending(null);
-    const { board, hands } = splitSfen(sfen);
+    const { board, hands } = splitSfenBoardHands(sfen);
     apiRef.current?.set({ sfen: { board, hands }, turnColor: turnColor as Color });
   };
 
