@@ -32,6 +32,31 @@ describe('classifyByLoss', () => {
   });
 });
 
+describe('classifyByLoss (GameKind 別閾値)', () => {
+  it('第4引数省略時の既定は chess（既存挙動と一致）', () => {
+    // 明示 'chess' でも省略でも同じ結果（後方互換）
+    expect(classifyByLoss(50, -120, false)).toBe('mistake'); // loss 170
+    expect(classifyByLoss(50, -120, false, 'chess')).toBe('mistake');
+  });
+
+  it('shogi はチェスより粗い閾値（30/120/300/700）', () => {
+    expect(classifyByLoss(100, 80, false, 'shogi')).toBe('best'); // loss 20 ≤ 30
+    expect(classifyByLoss(200, 100, false, 'shogi')).toBe('good'); // loss 100 ≤ 120
+    expect(classifyByLoss(400, 150, false, 'shogi')).toBe('inaccuracy'); // loss 250 ≤ 300
+    expect(classifyByLoss(800, 200, false, 'shogi')).toBe('mistake'); // loss 600 ≤ 700
+    expect(classifyByLoss(1000, 100, false, 'shogi')).toBe('blunder'); // loss 900 > 700
+  });
+
+  it('同じ loss でも chess と shogi で分類が変わる（loss 250）', () => {
+    expect(classifyByLoss(250, 0, false, 'chess')).toBe('blunder'); // chess: >200
+    expect(classifyByLoss(250, 0, false, 'shogi')).toBe('inaccuracy'); // shogi: ≤300
+  });
+
+  it('最善手は kind に依らず best', () => {
+    expect(classifyByLoss(500, -500, true, 'shogi')).toBe('best');
+  });
+});
+
 describe('buildExplanationContext', () => {
   it('大悪手を検出する(最善は+50だが指した後は相手+250=自分-250)', () => {
     const ctx = buildExplanationContext({

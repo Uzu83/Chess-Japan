@@ -47,6 +47,21 @@
 > 検証済み: `set role anon` でテーブルに触れると `new row violates row-level security policy` で弾かれることを確認。
 > **やってはいけない**: この2テーブルに anon/authenticated 向けの policy や GRANT を足すこと。コスト防衛が崩れる。
 
+### profiles テーブルは意図的に別方針（2026-07-07 Phase 2C-1・Codex ゲート①合意）
+
+`profiles`（`migrations/0004`）は **anon key 経由でユーザー(authenticated)が直接触れる初のテーブル**。
+上の全面ロック方針の例外だが、事故ではなく設計:
+
+- **owner スコープ**: SELECT/UPDATE とも `auth.uid() = id` の行のみ（RLS ポリシー）。anon には GRANT ゼロ。
+- **列レベル GRANT**: client が直接書けるのは `display_name` ただ1列。`rating`/`games`/
+  `rating_initialized`/`rating_source` は UPDATE GRANT 外＝RLS を通っても物理的に書けない。
+  変更は SECURITY DEFINER RPC（`set_initial_rating` / `apply_rated_result`・`migrations/0005`）のみ。
+- **公開 read 無し**: `display_name` は Google 実名が既定値になりうるため、リーダーボード用の
+  公開 read は 2C-3 で「SECURITY DEFINER RPC か列限定 VIEW」により意図的に開けるまで存在しない。
+- **この節の存在理由**: 未来の担当者が「profiles に倣って explain_cache/rate_counters にも
+  ポリシーを足す」逆流をしないため。**お金が直接出るテーブル（LLM 呼び出しの計数・キャッシュ）と
+  ユーザーデータのテーブルは信頼境界が別**。前者は今後も service_role only を維持する。
+
 ## プロンプトインジェクション対策（信頼境界の内側でも油断しない）
 
 LLM に渡すユーザー由来データ（局面の注釈・語彙・追問・履歴）には「指示の上書き」を仕込める。`buildPrompt` の規律:

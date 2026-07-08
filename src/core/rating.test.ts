@@ -6,6 +6,7 @@ import {
   INITIAL_RATING,
   K_FACTOR,
   RATING_FLOOR,
+  RATING_CEILING,
 } from './rating';
 
 describe('expectedScore', () => {
@@ -71,5 +72,27 @@ describe('applyResult', () => {
   it('INITIAL_RATING は現実的な初期値(800〜1500 の帯)', () => {
     expect(INITIAL_RATING).toBeGreaterThanOrEqual(800);
     expect(INITIAL_RATING).toBeLessThanOrEqual(1500);
+  });
+
+  // ── 天井クランプ(RATING_CEILING)のテスト ─────────────────────
+  // Phase 2C-1 で追加(Codex ゲート①指摘 #1 への対応)。
+  // サーバー側 profiles テーブルの check 制約 rating between 100 and 3000 と
+  // フロント側の applyResult を同じ範囲に保つため、天井動作を固定する。
+
+  it('天井(RATING_CEILING)付近で勝つと 3000 でクランプされ、delta は実変動に補正される', () => {
+    // 2998 が opp 2800 に勝利: 数式上 delta=+8 → 3006 → 天井 3000 → actual delta=+2
+    // この値は expectedScore(2998, 2800) ≈ 0.7577, round(32*0.2423) = round(7.754) = 8 から導出。
+    const r = applyResult(2998, 2800, 1);
+    expect(r.rating).toBe(RATING_CEILING); // 3000 でクランプ
+    expect(r.delta).toBe(2); // 実変動 = 3000 - 2998
+  });
+
+  it('天井(RATING_CEILING)ちょうどで勝っても rating は変わらず delta は 0', () => {
+    // 3000 からさらに上げようとしても天井でブロックされる。
+    // クランプ後 rating = 3000、実変動 = 3000 - 3000 = 0。
+    // 相手レートは任意(勝利なら delta_raw > 0 が保証される範囲を選ぶ)。
+    const r = applyResult(RATING_CEILING, 2800, 1);
+    expect(r.rating).toBe(RATING_CEILING);
+    expect(r.delta).toBe(0);
   });
 });
