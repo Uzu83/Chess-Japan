@@ -104,7 +104,8 @@ export interface ShogiKifHeaders {
   title?: string;
 }
 
-/** 標準初期局面の SFEN（平手）。カスタム開始は 4-2 スコープ外なので既定はこれのみ。 */
+/** 標準初期局面の SFEN（平手）。constructor 省略時の既定。Phase 4-3 でカスタム開始 SFEN も受ける
+ *  （UI は validateStartSfen で事前検証してから渡す）。 */
 const STANDARD_SFEN = InitialPositionSFEN.STANDARD;
 
 /**
@@ -130,6 +131,47 @@ function fromTsColor(c: TsColor): ShogiColor {
 /** 手番色を反転（勝者算出用）。 */
 export function oppositeShogiColor(c: ShogiColor): ShogiColor {
   return c === 'sente' ? 'gote' : 'sente';
+}
+
+/** validateStartSfen の結果（OK なら手番色つき）。 */
+export type StartSfenValidation = { ok: true; turn: ShogiColor } | { ok: false; reason: string };
+
+/**
+ * 「局面(SFEN)から対局」（Phase 4-3）の開始 SFEN を検証する pure 関数。
+ *
+ * WHY UI の手前に純粋関数の検証を挟むか（validate.ts と同じ信頼境界思想）:
+ *   ShogiPlayGame の constructor は不正 SFEN を平手へ自衛フォールバックする（:171-175）が、それは
+ *   「黙って別局面で始まる」= ユーザーが貼った局面と違う盤で対局が始まる悪い UX になる。UI は開始前に
+ *   この関数で弾き、理由を提示して設定画面に留める（チェスが chess.js の throw を catch して留まるのと対称）。
+ *   tsshogi 依存をこのファイル（=lazy チャンク）に閉じることで、PlayView（メインチャンク）へ tsshogi を
+ *   漏らさない（1 バイト不変条件）。
+ *
+ * 検証段:
+ *   (1) Position.newBySFEN が null → 構文不正（段数不足・不正手番文字・空 等。node 実測で null 確認済み）。
+ *   (2) 盤面トークンの玉が「先手玉 K・後手玉 k がそれぞれちょうど 1 枚」でない → 非合法。
+ *       WHY 存在ではなく個数か（Codex ゲート① F002・実測）: Position.newBySFEN は玉なし局面も
+ *       重複玉局面（K が 2 枚 等）も null にせず通す。玉なし/重複玉のままやねうら王へ渡すと非合法局面で
+ *       bestmove 異常・無応答・終局判定破綻が起きうる。攻方玉を省く純詰将棋は本 MVP では非対応
+ *       （チェス側 chess.js も両玉必須なのと対称）。王は成れないので盤トークンの K/k は玉のみ＝誤検出なし。
+ *       持ち駒に玉は入らないので、盤面トークン（split の [0]）だけを見れば持ち駒トークンを巻き込まない。
+ *
+ * 深い合法性（隣接玉・手番側が相手玉を取れる等）は検証しない（意図的スコープ限定・Codex ゲート① 合意）:
+ *   主入口（レビューからの「この局面から対局」）は常に合法局面を渡す。手貼りの subtly-illegal は
+ *   既存の graceful エラー処理（AI 応答失敗フラグ・null bestmove→AI 投了）が backstop になる。
+ *   完全合法性検証はエンジンロジックの重複で、合法エッジ局面を誤って弾くリスクがある。
+ */
+export function validateStartSfen(sfen: string): StartSfenValidation {
+  const trimmed = sfen.trim();
+  const pos = Position.newBySFEN(trimmed);
+  if (!pos) return { ok: false, reason: 'SFEN を解釈できませんでした' };
+  // 盤面トークン（最初の空白まで）の玉個数を数える。持ち駒・手番・手数トークンは巻き込まない。
+  const board = trimmed.split(/\s+/)[0] ?? '';
+  const senteKings = (board.match(/K/g) ?? []).length;
+  const goteKings = (board.match(/k/g) ?? []).length;
+  if (senteKings !== 1 || goteKings !== 1) {
+    return { ok: false, reason: '先手玉・後手玉がそれぞれ 1 枚ずつ必要です' };
+  }
+  return { ok: true, turn: fromTsColor(pos.color) };
 }
 
 /**

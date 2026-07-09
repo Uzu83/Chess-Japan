@@ -1,4 +1,4 @@
-import { ShogiPlayGame } from './shogiPlayGame';
+import { ShogiPlayGame, validateStartSfen } from './shogiPlayGame';
 import { shogiGameModel } from './shogiGame';
 
 /*
@@ -227,5 +227,56 @@ describe('ShogiPlayGame snapshot', () => {
     expect(s.history).toHaveLength(1);
     // 後手番の合法手 dests が入っている（例: ８四歩）
     expect(s.legalDests.get('8c')).toContain('8d');
+  });
+});
+
+describe('validateStartSfen（Phase 4-3・局面から対局の開始 SFEN 検証）', () => {
+  it('平手初期局面は ok で手番は先手（b）', () => {
+    const v = validateStartSfen(STANDARD_SFEN);
+    expect(v).toEqual({ ok: true, turn: 'sente' });
+  });
+
+  it('両玉ありの中盤局面（w 手番）は ok で手番は後手', () => {
+    // 平手から数手進んだ両玉あり局面（node 実測で newBySFEN OK・k/K 各1枚）。
+    const mid = 'lnsgkgsnl/1r5b1/pppppp1pp/6p2/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 4';
+    const v = validateStartSfen(mid);
+    expect(v).toEqual({ ok: true, turn: 'gote' });
+  });
+
+  it('両玉のみの最小局面も ok（詰将棋・練習の土台）', () => {
+    const v = validateStartSfen('4k4/9/9/9/9/9/9/9/4K4 b - 1');
+    expect(v).toEqual({ ok: true, turn: 'sente' });
+  });
+
+  it('前後の空白を許容する（trim される）', () => {
+    const v = validateStartSfen(`  ${STANDARD_SFEN}  `);
+    expect(v.ok).toBe(true);
+  });
+
+  it('構文不正な SFEN は ok:false（解釈不可）', () => {
+    for (const bad of ['not a sfen', '', 'lnsgkgsnl/9 b - 1']) {
+      const v = validateStartSfen(bad);
+      expect(v.ok).toBe(false);
+      if (!v.ok) expect(v.reason).toBe('SFEN を解釈できませんでした');
+    }
+  });
+
+  it('片玉（後手玉のみ・攻方玉なしの純詰将棋型）は ok:false（各1枚必要）', () => {
+    // 4k4 は後手玉のみ、先手玉 K が盤に無い。newBySFEN は通してしまうので個数で弾く。
+    const v = validateStartSfen('4k4/9/4P4/9/9/9/9/9/9 b G2r2b4g4s4n4l17p 1');
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.reason).toBe('先手玉・後手玉がそれぞれ 1 枚ずつ必要です');
+  });
+
+  it('重複玉（先手玉2枚）は ok:false（Codex ゲート① F002・presence では不十分）', () => {
+    // newBySFEN は重複玉を null にしないため、個数チェックが無いとやねうら王へ非合法局面が渡る。
+    const v = validateStartSfen('4k4/9/9/9/9/9/9/9/4KK3 b - 1');
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.reason).toBe('先手玉・後手玉がそれぞれ 1 枚ずつ必要です');
+  });
+
+  it('重複玉（後手玉2枚）も ok:false', () => {
+    const v = validateStartSfen('4kk3/9/9/9/9/9/9/9/4K4 b - 1');
+    expect(v.ok).toBe(false);
   });
 });
