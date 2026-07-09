@@ -11,11 +11,14 @@ import css from './shogiBoard.css?raw';
  *   を検出する。実効的な向きの目視は E2E スクショで担保する（コメントに明記した3点検証）。
  */
 describe('shogiBoard.css 駒の向き（回帰ガード）', () => {
-  it('回転は orientation×色 の組で決める（盤の“上側”＝相手の駒を回す）', () => {
-    // 先手向き（既定）: 後手(上)を回す
-    expect(css).toMatch(/\.sg-wrap\.orientation-sente\s+sg-pieces\s+piece\.gote::after/);
-    // 後手向き（盤反転・後手番/後手 SFEN 開始）: 先手(上)を回す
-    expect(css).toMatch(/\.sg-wrap\.orientation-gote\s+sg-pieces\s+piece\.sente::after/);
+  it('回転は orientation×色 の組で決め、rotate(180deg) が同一ルールに結合している', () => {
+    // Codex ゲート② F002: セレクタ行の存在だけでなく、その rule block に rotate(180deg) が
+    // 入っていることまで固定する（rotate が消えても selector が残ればすり抜ける退行を防ぐ）。
+    // 先手向き（既定）は後手(上)を、後手向き（盤反転・後手番/後手 SFEN 開始）は先手(上)を回す。
+    // この2セレクタが1つのルール（カンマ結合）で { ... transform: rotate(180deg) ... } を持つことを検証。
+    const coupledRule =
+      /\.sg-wrap\.orientation-sente\s+sg-pieces\s+piece\.gote::after\s*,\s*\.sg-wrap\.orientation-gote\s+sg-pieces\s+piece\.sente::after\s*\{[^}]*transform:\s*rotate\(180deg\)[^}]*\}/;
+    expect(css).toMatch(coupledRule);
   });
 
   it('色だけで回す旧ルール（orientation 非依存）が残っていない', () => {

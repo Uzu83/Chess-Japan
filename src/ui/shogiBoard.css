@@ -210,6 +210,14 @@
   align-items: center;
   justify-content: center;
 }
+/* 持ち駒のグリフは上下どちらの駒台でも正立で表示する（回転しない）。
+   WHY 盤上駒（orientation×色で回転）と揃えないか（Codex ゲート② F001・意図的な非対称）:
+     shogiground は上側 hand を opposite(orientation) の色で生成するため、盤上の同色駒は回転する一方
+     持ち駒は正立、という見た目の非対称は起きる。しかし持ち駒は 1.1rem と小さく横一列に密に並ぶため、
+     回転させると視認性が落ちる（何の駒か・枚数バッジとの重なりが読みにくくなる）。持ち駒は「種類と枚数が
+     一目で分かる」ことが最優先で、向きで手番を示す必要は盤上ほど無い（どちらの駒台にあるかで所属は自明）。
+     よって可読性優先で両駒台とも正立に固定する。向きで所属を示したくなったら hand-top を回す案は
+     Codex ゲート② F001 の suggested_fix を参照。 */
 .sg-wrap sg-hand piece::after {
   font-size: 1.1rem;
 }
