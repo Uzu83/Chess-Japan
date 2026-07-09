@@ -157,6 +157,18 @@ describe('formatEvalCp', () => {
     expect(formatEvalCp(98999)).toBe('+990.0');
     expect(formatEvalCp(-98999)).toBe('-990.0');
   });
+
+  it('将棋は生の評価値(整数・÷100しない)。詰み記号は共通（2026-07-10 scale 対応）', () => {
+    expect(formatEvalCp(120, 'shogi')).toBe('+120');
+    expect(formatEvalCp(-75, 'shogi')).toBe('-75');
+    expect(formatEvalCp(0, 'shogi')).toBe('+0');
+    expect(formatEvalCp(99999, 'shogi')).toBe('+M'); // 詰みは両ゲーム共通
+    expect(formatEvalCp(-99000, 'shogi')).toBe('-M');
+  });
+
+  it('game 既定は chess（既存呼び出し・テストは挙動不変）', () => {
+    expect(formatEvalCp(120)).toBe(formatEvalCp(120, 'chess'));
+  });
 });
 
 // ── formatMoveEval ────────────────────────────────────────────
@@ -174,6 +186,13 @@ describe('formatMoveEval', () => {
     expect(formatMoveEval(100, 'b')).toBe('-1.0');
     // evalAfter=-80 (黒不利=白有利) → 白視点 +80 → "+0.8"
     expect(formatMoveEval(-80, 'b')).toBe('+0.8');
+  });
+
+  it('将棋は生の評価値で表示（符号変換は共通・scale だけ生値）', () => {
+    // 先手(=w)が指した後 evalAfter=120 → 白視点 +120 → "+120"
+    expect(formatMoveEval(120, 'w', 'shogi')).toBe('+120');
+    // 後手(=b)が指した後 evalAfter=100(後手有利) → 白視点 -100 → "-100"
+    expect(formatMoveEval(100, 'b', 'shogi')).toBe('-100');
   });
 
   it('詰み値も正しく符号変換した上で "+M" / "-M" を返す', () => {

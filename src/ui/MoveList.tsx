@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { MoveRecord, MoveQuality, ExplanationContext } from '../core/types';
+import type { MoveRecord, MoveQuality, ExplanationContext, GameKind } from '../core/types';
 import { qualityLabelJa } from '../core/classify';
 import { formatMoveEval } from '../core/evalUtils';
 
@@ -45,10 +45,19 @@ interface MoveListProps {
    * 渡された場合、各手の隣に評価値(白視点)を小さく表示する。
    */
   contexts?: Record<number, ExplanationContext>;
+  /** ゲーム種別。評価値注釈の scale（将棋=生評価値 / チェス=ポーン換算）に使う。既定 chess で従来挙動。 */
+  game?: GameKind;
 }
 
 /** 棋譜の手をペア(白/黒)で表示し、クリックで局面へジャンプ。手の質バッジ付き。 */
-export function MoveList({ moves, currentIndex, qualities, onSelect, contexts }: MoveListProps) {
+export function MoveList({
+  moves,
+  currentIndex,
+  qualities,
+  onSelect,
+  contexts,
+  game = 'chess',
+}: MoveListProps) {
   const listRef = useRef<HTMLDivElement>(null);
 
   // ── 自動スクロール ─────────────────────────────────────────
@@ -93,7 +102,8 @@ export function MoveList({ moves, currentIndex, qualities, onSelect, contexts }:
     // WHY formatMoveEval に color を渡すか:
     //   evalAfter は「指したプレイヤー視点」。黒が指した後は符号反転して白視点に揃える。
     //   display 値は "+1.2" や "-0.5"、詰み時は "+M" / "-M"。
-    const evalText = ctx?.evalAfter !== undefined ? formatMoveEval(ctx.evalAfter, m.color) : null;
+    const evalText =
+      ctx?.evalAfter !== undefined ? formatMoveEval(ctx.evalAfter, m.color, game) : null;
 
     return (
       <button

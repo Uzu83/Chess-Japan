@@ -247,7 +247,7 @@ export function EvalGraph({
         moveLabel: `${Math.floor(tooltip.ply / 2) + 1}${tooltip.ply % 2 === 1 ? '...' : '.'} ${moves[tooltip.ply]?.san ?? ''} (${
           moves[tooltip.ply]?.color === 'b' ? secondLabel : firstLabel
         })`,
-        evalLabel: formatEvalCp(tooltip.whiteCp),
+        evalLabel: formatEvalCp(tooltip.whiteCp, game),
         qualityLabel: tooltip.quality ? qualityLabelJa(tooltip.quality) : null,
       }
     : null;
