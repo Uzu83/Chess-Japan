@@ -1293,6 +1293,7 @@ export function ReviewView({
               busy={busy}
               onExplain={onExplain}
               onAsk={onAsk}
+              game={kind}
             />
           </div>
         </aside>
