@@ -166,13 +166,20 @@ export function ExplanationPanel({
    * playedIsBest のとき PV ブロックは出さない(指した手が最善なら「代わりに何を指すべきだったか」
    * という問い自体が成立しないため。ヘッダーの「最善: 一致」で十分)。
    */
+  // 手の表示表記: 将棋は事前計算した日本語ラベル(bestMoveLabel/pvLabels)を優先し、無ければ
+  // チェスの uciToSan/uciLineToSan で SAN 化、それも失敗なら生 USI/UCI にフォールバック。
+  // WHY ラベル優先か（2026-07-09 バグ「解説に生 USI 7g7f が漏れる」）: uciToSan はチェス(chess.js)専用で
+  //   将棋 USI を変換できず生表記に落ちていた。tsshogi をこの panel（メインチャンク）に入れられないため、
+  //   将棋の解析経路(lazy)で日本語表記を作り context.bestMoveLabel/pvLabels に載せて運ぶ（types.ts 参照）。
   const bestSan = context.bestMove
-    ? (uciToSan(context.fenOrSfen, context.bestMove) ?? context.bestMove)
+    ? (context.bestMoveLabel ?? uciToSan(context.fenOrSfen, context.bestMove) ?? context.bestMove)
     : null;
   const playedIsBest =
     !context.bestMove || !context.movePlayed || context.movePlayed === context.bestMove;
   // 想定手順(最善に進んだ場合の読み筋)。表示は6手(3往復)まで — 筋の意図が伝わる最小量。
-  const pvSan = !playedIsBest && context.pv ? uciLineToSan(context.fenOrSfen, context.pv, 6) : [];
+  const pvSan = playedIsBest
+    ? []
+    : (context.pvLabels ?? (context.pv ? uciLineToSan(context.fenOrSfen, context.pv, 6) : []));
 
   return (
     <div className="flex flex-col gap-3">

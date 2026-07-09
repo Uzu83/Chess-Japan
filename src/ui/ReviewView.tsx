@@ -60,6 +60,30 @@ import { AccuracySummary } from './AccuracySummary';
 import { ExplanationPanel, type ChatTurn } from './ExplanationPanel';
 import { SAMPLE_PGN, SAMPLE_GAMES } from './sample';
 
+/*
+ * 将棋の解析コンテキストに表示専用の日本語手ラベル(bestMoveLabel/pvLabels)を付与する。
+ * （2026-07-09 バグ「解説に生 USI 7g7f が漏れる」対策。詳細は core/types.ts の当該フィールドコメント。）
+ *
+ * WHY 動的 import か（1バイト不変条件の要）: usiToJapanese/usiLineToJapanese は tsshogi 依存。ReviewView は
+ *   メインチャンクなので shogiNotation を静的 import すると tsshogi(将棋一式)がチェス利用者のバンドルへ漏れる。
+ *   将棋のときだけ `await import('../core/shogiNotation')` で読む（import は初回のみ・以降はキャッシュされるので
+ *   全手解析ループで毎手呼んでも実コストは初回だけ）。チェス(kind='chess')は素通しし、ExplanationPanel が
+ *   従来どおり uciToSan で SAN 化する（挙動不変）。ラベルは display 専用で LLM へは渡らない（validate.ts が
+ *   allowlist で drop）。
+ */
+async function withShogiMoveLabels(
+  ctx: ExplanationContext,
+  kind: GameKind,
+): Promise<ExplanationContext> {
+  if (kind !== 'shogi' || !ctx.bestMove) return ctx;
+  const { usiToJapanese, usiLineToJapanese } = await import('../core/shogiNotation');
+  return {
+    ...ctx,
+    bestMoveLabel: usiToJapanese(ctx.fenOrSfen, ctx.bestMove) ?? undefined,
+    pvLabels: ctx.pv ? usiLineToJapanese(ctx.fenOrSfen, ctx.pv, 6) : undefined,
+  };
+}
+
 const LEVELS: KnowledgeProfile['level'][] = ['beginner', 'intermediate', 'advanced'];
 const LEVEL_LABEL: Record<NonNullable<KnowledgeProfile['level']>, string> = {
   beginner: '初心者',
@@ -485,7 +509,10 @@ export function ReviewView({
         scoreAfter: after.lines[0]?.score ?? { type: 'cp', value: 0 },
         kind: model.kind, // 手の質分類の閾値を chess/shogi で切替
       });
-      setContexts((prev) => ({ ...prev, [ply]: ctx }));
+      // 将棋は日本語手ラベルを付与（生 USI の漏れ防止）。await 越しにキャンセルを再確認する。
+      const enriched = await withShogiMoveLabels(ctx, model.kind);
+      if (token !== analyzeToken.current) return;
+      setContexts((prev) => ({ ...prev, [ply]: enriched }));
     })();
   }, [index, model, moveRecords, contexts]);
 
@@ -542,8 +569,11 @@ export function ReviewView({
             scoreAfter: after.lines[0]?.score ?? { type: 'cp', value: 0 },
             kind: model.kind, // 手の質分類の閾値を chess/shogi で切替
           });
+          // 将棋は日本語手ラベルを付与（生 USI の漏れ防止）。await 越しにキャンセルを再確認する。
+          const enriched = await withShogiMoveLabels(ctx, model.kind);
+          if (bulkTokenRef.current !== myToken) break;
           // 既に別手段で解析済みの場合は上書きしない
-          setContexts((prev) => (ply in prev ? prev : { ...prev, [ply]: ctx }));
+          setContexts((prev) => (ply in prev ? prev : { ...prev, [ply]: enriched }));
         }
       } catch {
         // エンジンエラー(Worker 終了等)は無視して次の手へ
