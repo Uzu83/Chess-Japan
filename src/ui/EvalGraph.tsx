@@ -117,14 +117,21 @@ export function EvalGraph({
 
   const total = moves.length;
 
-  // 解析済みのデータ点を ply 昇順で構築
+  // 解析済みのデータ点を ply 昇順で構築。
+  // whiteCp = 描画座標用にクランプ(±GRAPH_CLAMP_CP)した白視点 cp。
+  // whiteCpRaw = ツールチップ表示用の生の白視点 cp（クランプしない＝詰み値 ±99999 や大きな評価を保持）。
+  // WHY 2 値を持つか（Codex ゲート② F001）: 以前は tooltip もクランプ済み whiteCp を表示していたため、
+  //   詰み(99999)が +M でなく +10.0/+1000、大きな将棋評価(2500)が +1000 に化けていた（将棋の生値化で顕在化）。
+  //   座標はクランプが必要だが表示は生値であるべきなので分離する。
   const points = useMemo(() => {
-    const pts: { ply: number; whiteCp: number }[] = [];
+    const pts: { ply: number; whiteCp: number; whiteCpRaw: number }[] = [];
     for (let ply = 0; ply < total; ply++) {
       const ctx = contexts[ply];
       // evalAfter が未定義(解析なし)はスキップ
       if (ctx?.evalAfter !== undefined) {
         let whiteCp = normalizeEvalToWhiteCp(ctx.evalAfter, moves[ply].color);
+        // 生値（クランプなし）。normalizeEvalToWhiteCp と同じ符号変換だがクランプしない。
+        let whiteCpRaw = moves[ply].color === 'w' ? ctx.evalAfter : -ctx.evalAfter;
 
         // ── 詰み終端の false-zero 修正 ──────────────────────
         // 問題: エンジンが詰み後の局面(合法手なし)を解析すると cp:0 を返すことがあり、
@@ -142,12 +149,13 @@ export function EvalGraph({
           ctx.evalBefore !== undefined &&
           Math.abs(ctx.evalBefore) > 800
         ) {
-          // evalBefore は「指したプレイヤー視点」なので白視点に変換してクランプ
+          // evalBefore は「指したプレイヤー視点」なので白視点に変換。座標はクランプ、tooltip は生値。
           const evalBeforeWhite = moves[ply].color === 'w' ? ctx.evalBefore : -ctx.evalBefore;
           whiteCp = Math.max(-GRAPH_CLAMP_CP, Math.min(GRAPH_CLAMP_CP, evalBeforeWhite));
+          whiteCpRaw = evalBeforeWhite;
         }
 
-        pts.push({ ply, whiteCp });
+        pts.push({ ply, whiteCp, whiteCpRaw });
       }
     }
     return pts;
@@ -232,7 +240,8 @@ export function EvalGraph({
       fraction,
       yFraction,
       ply: nearest.ply,
-      whiteCp: nearest.whiteCp,
+      // tooltip のラベルは生値を表示（クランプ済 whiteCp だと詰み +M や大評価が化ける・F001）。
+      whiteCp: nearest.whiteCpRaw,
       quality: contexts[nearest.ply]?.quality,
     });
   };
