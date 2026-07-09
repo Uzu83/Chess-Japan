@@ -104,6 +104,9 @@ export function EvalGraph({
   onSeek,
   game = 'chess',
 }: EvalGraphProps) {
+  // 手番ラベル: チェス=白/黒、将棋=先手/後手（tooltip とグラフ aria-label で共用）。
+  const firstLabel = game === 'shogi' ? '先手' : '白';
+  const secondLabel = game === 'shogi' ? '後手' : '黒';
   // useId で一意な ID を生成 → 複数インスタンスでの clipPath ID 衝突を防ぐ
   const uid = useId();
   const clipTop = `${uid}-top`;
@@ -240,15 +243,9 @@ export function EvalGraph({
   // 手番号: 1始まり(e.g. ply=3 → "2...d5 (黒)")
   const tooltipContent = tooltip
     ? {
+        // 手番ラベルは color で正確に判定（ply%2 は custom 開始局面で崩れる）。first=white=先手。
         moveLabel: `${Math.floor(tooltip.ply / 2) + 1}${tooltip.ply % 2 === 1 ? '...' : '.'} ${moves[tooltip.ply]?.san ?? ''} (${
-          // 手番ラベル: color で正確に判定（ply%2 は custom 開始局面で崩れる）。チェス=白/黒、将棋=先手/後手。
-          moves[tooltip.ply]?.color === 'b'
-            ? game === 'shogi'
-              ? '後手'
-              : '黒'
-            : game === 'shogi'
-              ? '先手'
-              : '白'
+          moves[tooltip.ply]?.color === 'b' ? secondLabel : firstLabel
         })`,
         evalLabel: formatEvalCp(tooltip.whiteCp),
         qualityLabel: tooltip.quality ? qualityLabelJa(tooltip.quality) : null,
@@ -258,7 +255,7 @@ export function EvalGraph({
   return (
     <div
       role="img"
-      aria-label={`評価グラフ: ${analyzedCount}/${total}手解析済み。上が白優勢・中央が互角・下が黒優勢。グラフをクリックするとその手へジャンプします。`}
+      aria-label={`評価グラフ: ${analyzedCount}/${total}手解析済み。上が${firstLabel}優勢・中央が互角・下が${secondLabel}優勢。グラフをクリックするとその手へジャンプします。`}
       className="relative"
     >
       <svg
