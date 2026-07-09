@@ -1,5 +1,5 @@
 import { useMemo, useId, useState } from 'react';
-import type { ExplanationContext, MoveRecord } from '../core/types';
+import type { ExplanationContext, GameKind, MoveRecord } from '../core/types';
 import { normalizeEvalToWhiteCp, GRAPH_CLAMP_CP, formatEvalCp } from '../core/evalUtils';
 import { qualityLabelJa } from '../core/classify';
 
@@ -82,6 +82,8 @@ interface EvalGraphProps {
    * 引数は currentIndex 相当(ply + 1)。
    */
   onSeek: (index: number) => void;
+  /** ゲーム種別。ツールチップの手番ラベル（チェス=白/黒 / 将棋=先手/後手）に使う。既定 chess で従来挙動。 */
+  game?: GameKind;
 }
 
 /** ply → SVG X座標。total=1 のとき中央に配置(0除算を避ける)。 */
@@ -95,7 +97,16 @@ function cpToY(cp: number): number {
   return MID - (cp / GRAPH_CLAMP_CP) * MID;
 }
 
-export function EvalGraph({ moves, contexts, currentIndex, onSeek }: EvalGraphProps) {
+export function EvalGraph({
+  moves,
+  contexts,
+  currentIndex,
+  onSeek,
+  game = 'chess',
+}: EvalGraphProps) {
+  // 手番ラベル: チェス=白/黒、将棋=先手/後手（tooltip とグラフ aria-label で共用）。
+  const firstLabel = game === 'shogi' ? '先手' : '白';
+  const secondLabel = game === 'shogi' ? '後手' : '黒';
   // useId で一意な ID を生成 → 複数インスタンスでの clipPath ID 衝突を防ぐ
   const uid = useId();
   const clipTop = `${uid}-top`;
@@ -232,7 +243,10 @@ export function EvalGraph({ moves, contexts, currentIndex, onSeek }: EvalGraphPr
   // 手番号: 1始まり(e.g. ply=3 → "2...d5 (黒)")
   const tooltipContent = tooltip
     ? {
-        moveLabel: `${Math.floor(tooltip.ply / 2) + 1}${tooltip.ply % 2 === 1 ? '...' : '.'} ${moves[tooltip.ply]?.san ?? ''} (${tooltip.ply % 2 === 0 ? '白' : '黒'})`,
+        // 手番ラベルは color で正確に判定（ply%2 は custom 開始局面で崩れる）。first=white=先手。
+        moveLabel: `${Math.floor(tooltip.ply / 2) + 1}${tooltip.ply % 2 === 1 ? '...' : '.'} ${moves[tooltip.ply]?.san ?? ''} (${
+          moves[tooltip.ply]?.color === 'b' ? secondLabel : firstLabel
+        })`,
         evalLabel: formatEvalCp(tooltip.whiteCp),
         qualityLabel: tooltip.quality ? qualityLabelJa(tooltip.quality) : null,
       }
@@ -241,7 +255,7 @@ export function EvalGraph({ moves, contexts, currentIndex, onSeek }: EvalGraphPr
   return (
     <div
       role="img"
-      aria-label={`評価グラフ: ${analyzedCount}/${total}手解析済み。上が白優勢・中央が互角・下が黒優勢。グラフをクリックするとその手へジャンプします。`}
+      aria-label={`評価グラフ: ${analyzedCount}/${total}手解析済み。上が${firstLabel}優勢・中央が互角・下が${secondLabel}優勢。グラフをクリックするとその手へジャンプします。`}
       className="relative"
     >
       <svg
