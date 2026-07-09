@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import type { ExplanationContext } from '../core/types';
+import type { ExplanationContext, GameKind } from '../core/types';
 import { qualityLabelJa } from '../core/classify';
 import { uciToSan, uciLineToSan } from '../core/notation';
+import { evalLabel } from './evalLabel';
 
 /*
  * ExplanationPanel — 解説・対話パネル
@@ -42,17 +43,8 @@ interface ExplanationPanelProps {
   busy: boolean;
   onExplain: () => void;
   onAsk: (question: string) => void;
-}
-
-/** センチポーン(手番側視点) → 表示用文字列。+/-符号付き。
- *  WHY 詰みを「白詰み/黒詰み」と書かないか: この値は手番側視点であり、白視点ではない。
- *  黒の手の評価で cp>0 は「黒に詰みあり」なので、色を断定すると逆になる(実際に誤表示だった)。
- *  視点に依存しない「詰み(勝ち/負け)」で表現する。 */
-function evalLabel(cp?: number): string {
-  if (cp === undefined) return '—';
-  if (Math.abs(cp) >= 99000) return cp > 0 ? '詰み(勝ち)' : '詰み(負け)';
-  const sign = cp > 0 ? '+' : '';
-  return `${sign}${(cp / 100).toFixed(1)}`;
+  /** ゲーム種別。評価値の scale（将棋=生評価値 / チェス=ポーン換算）に使う。既定 chess で従来挙動。 */
+  game?: GameKind;
 }
 
 /** 解説テキストがエラーメッセージかどうかを判定。 */
@@ -139,6 +131,7 @@ export function ExplanationPanel({
   busy,
   onExplain,
   onAsk,
+  game = 'chess',
 }: ExplanationPanelProps) {
   const [q, setQ] = useState('');
 
@@ -188,7 +181,7 @@ export function ExplanationPanel({
         {context.quality && <QualityBadge quality={context.quality} />}
 
         <span className="text-xs text-muted">
-          {evalLabel(context.evalBefore)} → {evalLabel(context.evalAfter)}
+          {evalLabel(context.evalBefore, game)} → {evalLabel(context.evalAfter, game)}
         </span>
 
         {bestSan && (
@@ -215,7 +208,7 @@ export function ExplanationPanel({
             最善は <span className="font-mono text-sm font-semibold text-ai">{bestSan}</span> でした
             {context.evalBefore !== undefined && (
               <span className="text-muted">
-                （指せば評価 {evalLabel(context.evalBefore)} を保てた）
+                （指せば評価 {evalLabel(context.evalBefore, game)} を保てた）
               </span>
             )}
           </p>
