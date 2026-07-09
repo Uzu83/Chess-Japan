@@ -483,6 +483,10 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
       switchKind('shogi'); // mount + 表示切替。開始は ShogiPlaySession の effect が担う。
       return;
     }
+    // チェス経路: 直前に将棋タブを開いていても必ずチェスへ戻してから開始する（Codex ゲート② F001）。
+    // これが無いと kind='shogi' のまま chess の startGame が走り、作られたチェス対局が hidden で
+    // 見えない（レビュー→チェスの「この局面から対局」に将棋タブ経由で到達したときの回帰）。
+    switchKind('chess');
     startGame(colorChoice, difficulty, { startFen: playFrom.fen, rated: false });
     // colorChoice は startFen 時に無視されるが、依存には正直に入れる(値が変わっても再発火しないのは
     // nonce ガードのおかげ。ガードが本質でここの deps は形式)。
