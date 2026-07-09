@@ -77,10 +77,16 @@ async function withShogiMoveLabels(
 ): Promise<ExplanationContext> {
   if (kind !== 'shogi' || !ctx.bestMove) return ctx;
   const { usiToJapanese, usiLineToJapanese } = await import('../core/shogiNotation');
+  // PV 変換が空（不正 SFEN / 先頭手が変換不能）なら pvLabels は undefined にする。
+  // WHY 空配列でなく undefined か（Codex ゲート② F001）: panel は `context.pvLabels ?? fallback` で
+  //   評価するため、定義済みの空配列を渡すと fallback（uciLineToSan）が発火せず想定手順が丸ごと消える。
+  //   undefined にすればフォールバック経路が生き、将棋では uciLineToSan が SFEN で graceful に [] を返す
+  //   （結果は同じ非表示だが「空配列が fallback を殺す」構造上の穴を塞ぐ）。
+  const pvLabels = ctx.pv ? usiLineToJapanese(ctx.fenOrSfen, ctx.pv, 6) : [];
   return {
     ...ctx,
     bestMoveLabel: usiToJapanese(ctx.fenOrSfen, ctx.bestMove) ?? undefined,
-    pvLabels: ctx.pv ? usiLineToJapanese(ctx.fenOrSfen, ctx.pv, 6) : undefined,
+    pvLabels: pvLabels.length > 0 ? pvLabels : undefined,
   };
 }
 
