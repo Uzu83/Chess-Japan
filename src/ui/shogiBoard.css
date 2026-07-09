@@ -90,9 +90,20 @@
 .sg-wrap sg-pieces piece::after {
   font-size: 7.4cqw;
 }
-/* 後手の盤上駒は 180 度回転（駒の向きで手番を示す）。piece 自体の translate を壊さないよう
-   ::after（グリフ）だけを回す。 */
-.sg-wrap sg-pieces piece.gote::after {
+/* 盤上駒の向き（駒の頭の向きで所属＝手番を示す）。回転すべきは「盤の“上側”にいる側」＝
+   viewer から見た相手の駒。piece 自体の translate を壊さないよう ::after（グリフ）だけを回す。
+   ── 向きは orientation（＝盤の下側に来る色）と駒の色の組で決める ──
+   ・orientation-sente（先手が下・既定）: 後手（上）を 180° 回す。
+   ・orientation-gote（後手が下・盤反転や後手番/後手 SFEN 開始）: 先手（上）を 180° 回す。
+   WHY 色だけで回さないか（2026-07-09 バグ「駒の漢字が双方逆」・再発防止）:
+     以前は `piece.gote` だけを回していた。これは駒の色にしか依存せず盤の向きに追従しないため、
+     orientation-gote のとき「先手駒(上)が正立・後手駒(下)が反転」となり双方が逆さに見えた
+     （Phase 4-2 の後手選択・盤反転でも潜伏、Phase 4-3 の後手番 SFEN 開始で顕在化）。
+     Phase 4-3 の E2E は駒サイズ/位置(getBoundingClientRect)は実測したがグリフの回転までは
+     見ておらず見逃した ⇒ 将棋盤検証は「サイズ・位置・向き」の3点をスクショで目視する。
+   shogiground は .sg-wrap に orientation-sente / orientation-gote を必ず付与する（両クラス実在を確認済み）。 */
+.sg-wrap.orientation-sente sg-pieces piece.gote::after,
+.sg-wrap.orientation-gote sg-pieces piece.sente::after {
   transform: rotate(180deg);
 }
 
