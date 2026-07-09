@@ -18,6 +18,8 @@
  *     ライト/ダーク切替に依存しない固定値を使う。盤面の駒色と同じルール。
  */
 
+import type { GameKind } from '../core/types';
+
 interface EvalBarProps {
   /**
    * 白視点のセンチポーン評価値。
@@ -25,6 +27,8 @@ interface EvalBarProps {
    * scoreToCp 済みの値を渡すこと(詰みは ±100000 等の大きな値)。
    */
   evalCp?: number;
+  /** ゲーム種別。詰みラベル（チェス=白/黒 / 将棋=先手/後手）に使う。既定 chess で従来挙動。 */
+  game?: GameKind;
 }
 
 /** ±cp を [0, 1] の白割合に正規化。飽和ラインを 700cp に設定。 */
@@ -35,23 +39,23 @@ function toWhiteRatio(cp: number | undefined): number {
   return 0.5 + clamped / 700 / 2;
 }
 
-/** 評価値を人間向け文字列にフォーマット。tooltip / aria 用。 */
-function formatCp(cp: number | undefined): string {
+/** 評価値を人間向け文字列にフォーマット。tooltip / aria 用。詰みの手番ラベルは game 依存。 */
+function formatCp(cp: number | undefined, game: GameKind): string {
   if (cp === undefined) return '解析中';
   if (Math.abs(cp) >= 99000) {
-    // 詰み値(scoreToCp では 100000 - 手数)
-    const sign = cp > 0 ? '白' : '黒';
+    // 詰み値(scoreToCp では 100000 - 手数)。手番ラベルはチェス=白/黒、将棋=先手/後手。
+    const sign = cp > 0 ? (game === 'shogi' ? '先手' : '白') : game === 'shogi' ? '後手' : '黒';
     return `${sign}詰み`;
   }
   const sign = cp > 0 ? '+' : '';
   return `${sign}${(cp / 100).toFixed(1)}`;
 }
 
-export function EvalBar({ evalCp }: EvalBarProps) {
+export function EvalBar({ evalCp, game = 'chess' }: EvalBarProps) {
   const whiteRatio = toWhiteRatio(evalCp);
   const whitePct = whiteRatio * 100;
   const blackPct = 100 - whitePct;
-  const label = `評価: ${formatCp(evalCp)}`;
+  const label = `評価: ${formatCp(evalCp, game)}`;
 
   return (
     <div

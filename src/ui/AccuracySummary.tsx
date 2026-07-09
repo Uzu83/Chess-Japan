@@ -1,6 +1,6 @@
 import type { AccuracySummary, QualityCount } from '../core/evalUtils';
 import { qualityLabelJa } from '../core/classify';
-import type { MoveQuality } from '../core/types';
+import type { GameKind, MoveQuality } from '../core/types';
 
 /*
  * AccuracySummary — 精度サマリ
@@ -30,6 +30,8 @@ interface AccuracySummaryProps {
   summary: AccuracySummary;
   /** ゲームの総手数(解析済み割合の表示用)。 */
   totalMoves: number;
+  /** ゲーム種別。手番ラベル（チェス=白/黒 / 将棋=先手/後手）に使う。既定 chess で従来挙動。 */
+  game?: GameKind;
 }
 
 /**
@@ -46,7 +48,8 @@ function ColorRow({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1 text-xs">
-      <span className="w-5 shrink-0 font-semibold text-muted">{label}</span>
+      {/* min-w-5: チェス(白/黒 1字)は従来幅、将棋(先手/後手 2字)は自然に広がる。両行は同字数なので整列は保たれる。 */}
+      <span className="min-w-5 shrink-0 font-semibold text-muted">{label}</span>
 
       {ALL_QUALITIES.map((q) => {
         const count = counts[q];
@@ -73,7 +76,10 @@ function ColorRow({
  * 白/黒別に手の質分布を小さくサマリ表示するコンポーネント。
  * 解析済み手が 1 手もない場合は null(非表示)を返す。
  */
-export function AccuracySummary({ summary, totalMoves }: AccuracySummaryProps) {
+export function AccuracySummary({ summary, totalMoves, game = 'chess' }: AccuracySummaryProps) {
+  // 手番ラベル: チェス=白/黒、将棋=先手/後手（white=先手=盤下, black=後手 の対応。gameModel.ts の color 割当と一致）。
+  const firstLabel = game === 'shogi' ? '先手' : '白';
+  const secondLabel = game === 'shogi' ? '後手' : '黒';
   const analyzedTotal = summary.whiteTotal + summary.blackTotal;
   // 1手も解析されていなければ表示しない
   if (analyzedTotal === 0) return null;
@@ -91,8 +97,8 @@ export function AccuracySummary({ summary, totalMoves }: AccuracySummaryProps) {
       </div>
 
       <div className="flex flex-col gap-1">
-        <ColorRow label="白" counts={summary.white} total={summary.whiteTotal} />
-        <ColorRow label="黒" counts={summary.black} total={summary.blackTotal} />
+        <ColorRow label={firstLabel} counts={summary.white} total={summary.whiteTotal} />
+        <ColorRow label={secondLabel} counts={summary.black} total={summary.blackTotal} />
       </div>
     </section>
   );

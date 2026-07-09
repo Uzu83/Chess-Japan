@@ -1,5 +1,5 @@
 import { useMemo, useId, useState } from 'react';
-import type { ExplanationContext, MoveRecord } from '../core/types';
+import type { ExplanationContext, GameKind, MoveRecord } from '../core/types';
 import { normalizeEvalToWhiteCp, GRAPH_CLAMP_CP, formatEvalCp } from '../core/evalUtils';
 import { qualityLabelJa } from '../core/classify';
 
@@ -82,6 +82,8 @@ interface EvalGraphProps {
    * 引数は currentIndex 相当(ply + 1)。
    */
   onSeek: (index: number) => void;
+  /** ゲーム種別。ツールチップの手番ラベル（チェス=白/黒 / 将棋=先手/後手）に使う。既定 chess で従来挙動。 */
+  game?: GameKind;
 }
 
 /** ply → SVG X座標。total=1 のとき中央に配置(0除算を避ける)。 */
@@ -95,7 +97,13 @@ function cpToY(cp: number): number {
   return MID - (cp / GRAPH_CLAMP_CP) * MID;
 }
 
-export function EvalGraph({ moves, contexts, currentIndex, onSeek }: EvalGraphProps) {
+export function EvalGraph({
+  moves,
+  contexts,
+  currentIndex,
+  onSeek,
+  game = 'chess',
+}: EvalGraphProps) {
   // useId で一意な ID を生成 → 複数インスタンスでの clipPath ID 衝突を防ぐ
   const uid = useId();
   const clipTop = `${uid}-top`;
@@ -232,7 +240,16 @@ export function EvalGraph({ moves, contexts, currentIndex, onSeek }: EvalGraphPr
   // 手番号: 1始まり(e.g. ply=3 → "2...d5 (黒)")
   const tooltipContent = tooltip
     ? {
-        moveLabel: `${Math.floor(tooltip.ply / 2) + 1}${tooltip.ply % 2 === 1 ? '...' : '.'} ${moves[tooltip.ply]?.san ?? ''} (${tooltip.ply % 2 === 0 ? '白' : '黒'})`,
+        moveLabel: `${Math.floor(tooltip.ply / 2) + 1}${tooltip.ply % 2 === 1 ? '...' : '.'} ${moves[tooltip.ply]?.san ?? ''} (${
+          // 手番ラベル: color で正確に判定（ply%2 は custom 開始局面で崩れる）。チェス=白/黒、将棋=先手/後手。
+          moves[tooltip.ply]?.color === 'b'
+            ? game === 'shogi'
+              ? '後手'
+              : '黒'
+            : game === 'shogi'
+              ? '先手'
+              : '白'
+        })`,
         evalLabel: formatEvalCp(tooltip.whiteCp),
         qualityLabel: tooltip.quality ? qualityLabelJa(tooltip.quality) : null,
       }

@@ -926,7 +926,7 @@ export function ReviewView({
           {/* 評価バー(左) + 盤(右) */}
           <div className="mx-auto flex w-full max-w-[500px] items-stretch gap-2">
             <div className="w-3 flex-none">
-              <EvalBar evalCp={evalCpWhite} />
+              <EvalBar evalCp={evalCpWhite} game={kind} />
             </div>
             <div className="min-w-0 flex-1">
               {/* orientation を state で制御 → 盤反転ボタンと連動。
@@ -982,7 +982,15 @@ export function ReviewView({
             <button
               type="button"
               onClick={() => setOrientation((o) => (o === 'white' ? 'black' : 'white'))}
-              aria-label={`盤を反転（現在: ${orientation === 'white' ? '白目線' : '黒目線'}）`}
+              aria-label={`盤を反転（現在: ${
+                orientation === 'white'
+                  ? kind === 'shogi'
+                    ? '先手目線'
+                    : '白目線'
+                  : kind === 'shogi'
+                    ? '後手目線'
+                    : '黒目線'
+              }）`}
               title="盤を反転"
               disabled={!model}
               className="focus-ai ml-1 min-h-11 min-w-11 rounded-lg border border-border px-3 text-sm text-on-surface transition-colors hover:bg-surface-2 disabled:opacity-30"
@@ -1020,6 +1028,7 @@ export function ReviewView({
                 contexts={contexts}
                 currentIndex={index}
                 onSeek={setIndex}
+                game={kind}
               />
             </div>
           )}
@@ -1280,7 +1289,11 @@ export function ReviewView({
 
           {/* 精度サマリ(1手以上解析済みのとき表示) */}
           {model && accuracySummary && (
-            <AccuracySummary summary={accuracySummary} totalMoves={moveRecords.length} />
+            <AccuracySummary
+              summary={accuracySummary}
+              totalMoves={moveRecords.length}
+              game={kind}
+            />
           )}
 
           {/* 解説パネル */}
