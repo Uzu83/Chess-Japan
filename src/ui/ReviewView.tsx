@@ -1284,6 +1284,7 @@ export function ReviewView({
               qualities={qualities}
               contexts={contexts}
               onSelect={setIndex}
+              game={kind}
             />
           )}
 

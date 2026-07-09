@@ -1,4 +1,4 @@
-import type { ExplanationContext, MoveQuality, MoveRecord } from './types';
+import type { ExplanationContext, GameKind, MoveQuality, MoveRecord } from './types';
 
 // ── 評価値フォーマット ─────────────────────────────────────────
 
@@ -12,11 +12,17 @@ import type { ExplanationContext, MoveQuality, MoveRecord } from './types';
  *
  * 用途: MoveList の評価列・EvalGraph ツールチップ。
  *
+ * scale は game 依存（2026-07-10「将棋の評価がチェスのポーン換算で出る」対策・ExplanationPanel の
+ * evalLabel と同方針）: チェス=ポーン換算(cp/100="+0.4")、将棋=生の評価値(整数"+40")。詰み(±99000
+ * 以上)の "+M"/"-M" は両ゲーム共通。game 既定 chess で既存呼び出し・テストは挙動不変。
+ *
  * @param whiteCp 白視点センチポーン(正=白有利 / 負=黒有利)
+ * @param game    ゲーム種別（既定 chess）
  */
-export function formatEvalCp(whiteCp: number): string {
+export function formatEvalCp(whiteCp: number, game: GameKind = 'chess'): string {
   if (whiteCp >= 99000) return '+M';
   if (whiteCp <= -99000) return '-M';
+  if (game === 'shogi') return (whiteCp >= 0 ? '+' : '') + whiteCp;
   const pawns = whiteCp / 100;
   return (pawns >= 0 ? '+' : '') + pawns.toFixed(1);
 }
@@ -30,10 +36,15 @@ export function formatEvalCp(whiteCp: number): string {
  *
  * @param evalAfter ExplanationContext.evalAfter の値(手番側視点 cp)
  * @param color     手を指したプレイヤー
+ * @param game      ゲーム種別（既定 chess・scale を formatEvalCp に伝播）
  */
-export function formatMoveEval(evalAfter: number, color: 'w' | 'b'): string {
+export function formatMoveEval(
+  evalAfter: number,
+  color: 'w' | 'b',
+  game: GameKind = 'chess',
+): string {
   const whiteCp = color === 'w' ? evalAfter : -evalAfter;
-  return formatEvalCp(whiteCp);
+  return formatEvalCp(whiteCp, game);
 }
 
 /**
