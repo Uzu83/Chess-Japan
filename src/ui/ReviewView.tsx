@@ -128,10 +128,11 @@ export function ReviewView({
   initialRecord?: { kind: GameKind; text: string };
   active?: boolean;
   /**
-   * 「この局面から対局」(Phase 2B)。現在表示中の局面 FEN を対局画面へ引き渡す。
+   * 「この局面から対局」(Phase 2B: チェス / Phase 4-3: 将棋)。現在表示中の局面(チェス=FEN / 将棋=SFEN)を
+   * kind と共に対局画面へ引き渡す。App がこの kind で chess/shogi の対局へ振り分ける。
    * 未指定なら導線ボタン自体を出さない(単体利用やテストで PlayView が無い構成を壊さない)。
    */
-  onPlayFrom?: (fen: string) => void;
+  onPlayFrom?: (fen: string, kind: GameKind) => void;
 } = {}) {
   // chess の PGN 初期値。将棋レコードのときはサンプル PGN のまま（将棋本文は shogiText へ）。
   const [pgnText, setPgnText] = useState(
@@ -952,15 +953,18 @@ export function ReviewView({
             >
               ⇅
             </button>
-            {/* この局面から対局(Phase 2B・④「復習で再開」の実装)
-                現在表示中の局面 FEN を PlayView へ渡してカジュアル対局を開始する。
+            {/* この局面から対局(Phase 2B: チェス / Phase 4-3: 将棋・④「復習で再開」の実装)
+                現在表示中の局面(チェス=FEN / 将棋=SFEN)を kind と共に PlayView へ渡してカジュアル対局を開始。
                 「悪手の場面から自分ならどう指すか試す」という復習ループの核。
-                WHY チェス限定か: PlayView(対局)は現状チェス専用。将棋の局面を渡しても対局できないので
-                将棋モードでは導線ごと隠す（将棋の対局は Phase 4-2 で別途）。 */}
-            {onPlayFrom && kind === 'chess' && (
+                WHY 将棋は COI_ENABLED 条件付きか: 将棋対局はやねうら王(SharedArrayBuffer 必須)を使う。
+                  coi=false(Safari 等)では ShogiPlaySession が対局を開始できない(入口A effect が !COI_ENABLED で
+                  封じる)ので、クリックしても始まらない dead 導線を出さないよう、将棋のときだけ環境で隠す。
+                  チェスは coi 不要で常時可(lite-single)。将棋の閲覧・棋譜レビュー自体は coi 不要なので、
+                  導線だけを coi で封じる非対称は Phase 4-2 と一貫。 */}
+            {onPlayFrom && (kind === 'chess' || (kind === 'shogi' && COI_ENABLED)) && (
               <button
                 type="button"
-                onClick={() => model && onPlayFrom(model.fenAt(index))}
+                onClick={() => model && onPlayFrom(model.fenAt(index), kind)}
                 disabled={!model}
                 title="表示中の局面から AI と対局（カジュアル・あなたは手番側）"
                 className="focus-ai ml-1 min-h-11 rounded-lg border border-ai px-3 text-sm font-medium text-ai transition-colors hover:bg-ai-bg disabled:opacity-30 dark:border-ai-muted dark:text-ai-muted dark:hover:bg-ai-deep"

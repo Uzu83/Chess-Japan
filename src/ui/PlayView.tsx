@@ -146,11 +146,15 @@ interface PlayViewProps {
    */
   onReview: (record: { kind: GameKind; text: string }) => void;
   /**
-   * レビュー画面からの「この局面から対局」(Phase 2B)。
-   * nonce を変えて渡すたびに、その FEN からカジュアル対局(レート変動なし)を開始する。
-   * WHY nonce か: 同じ FEN を連続で渡しても再開始できるように、値の変化で発火を検知する。
+   * レビュー画面からの「この局面から対局」(Phase 2B: チェス / Phase 4-3: 将棋)。
+   * nonce を変えて渡すたびに、その局面からカジュアル対局(レート変動なし)を開始する。
+   * WHY nonce か: 同じ局面を連続で渡しても再開始できるように、値の変化で発火を検知する。
+   * kind: チェスなら fen は FEN で下の chess startGame へ、将棋なら fen は SFEN で ShogiPlaySession へ。
+   *   WHY フィールド名を fen のまま将棋 SFEN も載せるか: storage.ts が KIF を pgn フィールドに載せて
+   *   「フィールド名の負債を許容」した前例に倣い、本番稼働中のチェス経路の diff を最小化して回帰を避ける
+   *   （この playFrom はメモリ上の一時 state で永続化されないためリネームも安全だが、チェス経路無改修を優先）。
    */
-  playFrom?: { fen: string; nonce: number } | null;
+  playFrom?: { fen: string; nonce: number; kind: GameKind } | null;
 }
 
 export function PlayView({ onReview, playFrom }: PlayViewProps) {
@@ -460,20 +464,41 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
     }
   }, [snap, youColor]);
 
-  // ── レビュー局面からの対局開始(Phase 2B) ────────────────────
+  // ── レビュー局面からの対局開始(Phase 2B: チェス / Phase 4-3: 将棋) ──
   /*
-   * App 経由で playFrom(fen + nonce)が渡されたら、その局面からカジュアル対局を開始する。
-   * nonce の変化だけに反応(同一 FEN の再要求にも応える)。難易度は現在の選択を使う。
+   * App 経由で playFrom(fen + nonce + kind)が渡されたら、その局面からカジュアル対局を開始する。
+   * nonce の変化だけに反応(同一局面の再要求にも応える)。難易度は現在の選択を使う。
+   * kind 分岐:
+   *   - chess: 従来どおり chess の startGame を FEN で呼ぶ(既存挙動不変)。
+   *   - shogi: switchKind('shogi') で将棋タブへ切替え、実際の開始は ShogiPlaySession 側の playFrom
+   *     effect に委譲する(下で shogiPlayFrom を prop で渡す)。将棋の対局開始ロジックは
+   *     ShogiPlaySession に閉じているため PlayView からは呼べない=責務分離。
    */
   const lastPlayFromNonce = useRef<number | null>(null);
   useEffect(() => {
     if (!playFrom) return;
     if (lastPlayFromNonce.current === playFrom.nonce) return;
     lastPlayFromNonce.current = playFrom.nonce;
+    if (playFrom.kind === 'shogi') {
+      switchKind('shogi'); // mount + 表示切替。開始は ShogiPlaySession の effect が担う。
+      return;
+    }
+    // チェス経路: 直前に将棋タブを開いていても必ずチェスへ戻してから開始する（Codex ゲート② F001）。
+    // これが無いと kind='shogi' のまま chess の startGame が走り、作られたチェス対局が hidden で
+    // 見えない（レビュー→チェスの「この局面から対局」に将棋タブ経由で到達したときの回帰）。
+    switchKind('chess');
     startGame(colorChoice, difficulty, { startFen: playFrom.fen, rated: false });
     // colorChoice は startFen 時に無視されるが、依存には正直に入れる(値が変わっても再発火しないのは
     // nonce ガードのおかげ。ガードが本質でここの deps は形式)。
-  }, [playFrom, startGame, colorChoice, difficulty]);
+  }, [playFrom, startGame, colorChoice, difficulty, switchKind]);
+
+  /*
+   * 将棋の入口A用 playFrom を ShogiPlaySession へ渡す形へ変換する。
+   * kind='shogi' のときだけ非 null。ShogiPlaySession は nonce の変化で 1 回だけ開始する。
+   * WHY ここで組むか: PlayView は SFEN 文字列を素通しするだけで tsshogi に触れない(1 バイト不変条件)。
+   */
+  const shogiPlayFrom =
+    playFrom && playFrom.kind === 'shogi' ? { sfen: playFrom.fen, nonce: playFrom.nonce } : null;
 
   // ── 派生値 ──────────────────────────────────────────────────
   const isOver = snap?.outcome.over ?? false;
@@ -720,7 +745,7 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
               />
             }
           >
-            <ShogiPlaySession onReview={onReview} />
+            <ShogiPlaySession onReview={onReview} playFrom={shogiPlayFrom} />
           </Suspense>
         </div>
       )}

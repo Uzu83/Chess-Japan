@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ShogiPlayGame,
   oppositeShogiColor,
+  validateStartSfen,
   type ShogiColor,
   type ShogiPlaySnapshot,
 } from '../core/shogiPlayGame';
@@ -131,13 +132,21 @@ const COI_ENABLED = typeof window !== 'undefined' && window.crossOriginIsolated 
 interface ShogiPlaySessionProps {
   /** 「この対局を振り返る」で KIF をレビュー画面へ引き渡すコールバック（kind 対応・Codex 修正 #2）。 */
   onReview: (record: { kind: 'shogi'; text: string }) => void;
+  /**
+   * 入口A（Phase 4-3）: レビュー画面の「この局面から対局」から渡ってくる開始 SFEN + nonce。
+   * PlayView が kind='shogi' の playFrom を受けたときだけ非 null を渡す。nonce の変化で 1 回だけ発火。
+   * WHY component の外（PlayView）で受けて prop で渡すか: 将棋の対局開始ロジック（エンジン・レート・
+   *   turnToken）は本 component に閉じており PlayView から呼べない。PlayView は kind を切り替えて SFEN を
+   *   渡すだけで、実際の開始は下の effect が担う（責務分離）。省略時（チェス利用/入口A未使用）は影響なし。
+   */
+  playFrom?: { sfen: string; nonce: number } | null;
 }
 
 /**
  * 将棋 AI 対局セッション本体。PlayView の状態機械を将棋へ写した独立実装。
  * default export は React.lazy から読むため。
  */
-export default function ShogiPlaySession({ onReview }: ShogiPlaySessionProps) {
+export default function ShogiPlaySession({ onReview, playFrom }: ShogiPlaySessionProps) {
   // ── エンジン ────────────────────────────────────────────────
   const engineRef = useRef<ChessEngine | null>(null);
   // 'loading' 初期・'unsupported'(coi=false) は create せず即確定。
@@ -288,17 +297,22 @@ export default function ShogiPlaySession({ onReview }: ShogiPlaySessionProps) {
   );
 
   // ── 対局開始 ────────────────────────────────────────────────
+  // opts.startSfen（Phase 4-3・局面から対局）: 指定時はその SFEN から開始する。呼び出し側（設定の
+  //   SFEN 入力 / 入口A の effect）が validateStartSfen で事前検証済みの前提だが、constructor も
+  //   不正時は平手へ自衛フォールバックする（:171-175）。チェス PlayView.startGame の opts と同型。
   const startGame = useCallback(
-    (choice: ColorChoice, diff: Difficulty, rated: boolean) => {
-      // Phase 4-2 は標準初期局面のみ（将棋版「この局面から対局」は 4-3 スコープ外）。
-      const game = new ShogiPlayGame();
-      const color = resolveColor(choice);
+    (choice: ColorChoice, diff: Difficulty, opts?: { startSfen?: string; rated?: boolean }) => {
+      const startSfen = opts?.startSfen;
+      const game = new ShogiPlayGame(startSfen);
+      // SFEN 指定時は「その局面の手番側」をあなたに割り当てる（色選択を無視）。チェス :338-339 と対称。
+      const color = startSfen ? game.turn : resolveColor(choice);
 
       // 同期的に ref を確定（runAiMove が即参照できるように state 更新前に入れる）
       gameRef.current = game;
       youColorRef.current = color;
       activeDifficultyRef.current = diff;
-      activeRatedRef.current = rated;
+      // SFEN 対局は常にカジュアル（任意局面の有利不利が不明でレート戦にできない）。チェス :346 と対称。
+      activeRatedRef.current = Boolean(opts?.rated) && !startSfen;
       usedTakebackRef.current = false;
       ++turnTokenRef.current; // 前局の AI 応答を無効化
       savedCurrentRef.current = false;
@@ -315,6 +329,26 @@ export default function ShogiPlaySession({ onReview }: ShogiPlaySessionProps) {
     },
     [runAiMove],
   );
+
+  // ── 入口A（Phase 4-3）: レビュー局面からの対局開始 ────────────
+  /*
+   * PlayView 経由で playFrom(sfen + nonce) が渡されたら、その局面からカジュアル対局を開始する。
+   * チェス PlayView.tsx:468-476 の Phase 2B effect と同型（nonce の変化だけに反応）。
+   * ガード:
+   *   - COI_ENABLED（SharedArrayBuffer）が無い環境では開始しない。エンジンが指せないので設定画面に留め、
+   *     既存の unsupported 告知で理由を見せる（黙って始めて AI が無応答、を避ける）。
+   *   - validateStartSfen で二段防御（レビュー由来 SFEN は常に合法だが、想定外入力を弾く）。
+   */
+  const lastPlayFromNonce = useRef<number | null>(null);
+  useEffect(() => {
+    if (!playFrom) return;
+    if (lastPlayFromNonce.current === playFrom.nonce) return;
+    lastPlayFromNonce.current = playFrom.nonce;
+    if (!COI_ENABLED) return; // 非対応環境は開始しない（設定画面の unsupported 告知に委ねる）
+    if (!validateStartSfen(playFrom.sfen).ok) return; // 二段防御
+    startGame(colorChoice, difficulty, { startSfen: playFrom.sfen, rated: false });
+    // colorChoice/difficulty は startSfen 時に色が無視される。deps には正直に入れる（nonce ガードが本質）。
+  }, [playFrom, startGame, colorChoice, difficulty]);
 
   // ── 投了 ────────────────────────────────────────────────────
   const handleResign = useCallback(() => {
@@ -440,7 +474,8 @@ export default function ShogiPlaySession({ onReview }: ShogiPlaySessionProps) {
           onColorChange={setColorChoice}
           onDifficultyChange={setDifficulty}
           onRatedChange={setRatedChoice}
-          onStart={() => startGame(colorChoice, difficulty, ratedChoice)}
+          onStart={() => startGame(colorChoice, difficulty, { rated: ratedChoice })}
+          onStartFromSfen={(sfen) => startGame(colorChoice, difficulty, { startSfen: sfen })}
           history={history}
           onReviewHistory={(kif) => onReview({ kind: 'shogi', text: kif })}
           onDeleteHistory={(id) =>
@@ -531,7 +566,7 @@ export default function ShogiPlaySession({ onReview }: ShogiPlaySessionProps) {
                     const game = gameRef.current;
                     if (game) onReview({ kind: 'shogi', text: game.exportKif() });
                   }}
-                  onRematch={() => startGame(colorChoice, difficulty, ratedChoice)}
+                  onRematch={() => startGame(colorChoice, difficulty, { rated: ratedChoice })}
                   onNewGame={handleNewGame}
                 />
               )}
@@ -599,6 +634,7 @@ function ShogiSetupScreen({
   onDifficultyChange,
   onRatedChange,
   onStart,
+  onStartFromSfen,
   history,
   onReviewHistory,
   onDeleteHistory,
@@ -613,6 +649,8 @@ function ShogiSetupScreen({
   onDifficultyChange: (d: Difficulty) => void;
   onRatedChange: (r: boolean) => void;
   onStart: () => void;
+  /** 入口B（Phase 4-3）: 貼付 SFEN からカジュアル対局を開始する。 */
+  onStartFromSfen: (sfen: string) => void;
   history: PlayedGame[];
   onReviewHistory: (kif: string) => void;
   onDeleteHistory: (id: string) => void;
@@ -622,6 +660,11 @@ function ShogiSetupScreen({
     { value: 'gote', label: '後手' },
     { value: 'random', label: 'ランダム' },
   ];
+
+  // 入口B: 「局面(SFEN)から対局」の入力状態。validateStartSfen で開始可否と理由を判定する。
+  const [sfenText, setSfenText] = useState('');
+  const sfenTrimmed = sfenText.trim();
+  const sfenValidation = sfenTrimmed ? validateStartSfen(sfenTrimmed) : null;
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
@@ -757,6 +800,44 @@ function ShogiSetupScreen({
                 ? 'エンジン読込に失敗しました'
                 : '対局開始'}
         </button>
+
+        {/* ── 入口B: 局面(SFEN)から対局（Phase 4-3: 詰将棋・練習・途中局面） ──
+            折りたたみで通常フローを邪魔しない。チェス PlayView の FEN 入力（:925-954）の写像。
+            常にカジュアル（任意局面の有利不利が不明）。エンジン非対応環境では開始を封じる。 */}
+        <details className="rounded-xl border border-border bg-surface p-3">
+          <summary className="focus-ai -m-1 cursor-pointer rounded p-1 text-xs font-medium text-muted">
+            局面(SFEN)から対局する — 詰将棋・練習問題向け(カジュアル扱い)
+          </summary>
+          <div className="mt-2 flex flex-col gap-2">
+            <input
+              value={sfenText}
+              onChange={(e) => setSfenText(e.target.value)}
+              placeholder="例: lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
+              spellCheck={false}
+              aria-label="開始局面の SFEN"
+              className="w-full rounded-lg border border-border bg-surface-2 px-2.5 py-2 font-mono text-xs text-on-surface placeholder:text-subtle focus:border-ai focus:outline-none"
+            />
+            {/* 不正 SFEN・片玉・重複玉は理由を出して開始を封じる（Codex ゲート① F002）。 */}
+            {sfenValidation && !sfenValidation.ok && (
+              <p role="alert" className="text-[11px] text-[var(--q-miss-fg)]">
+                {sfenValidation.reason}
+              </p>
+            )}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onStartFromSfen(sfenTrimmed)}
+                disabled={!engineReady || !sfenValidation?.ok}
+                className="focus-ai min-h-9 rounded-lg border border-ai px-3 text-xs font-medium text-ai transition-colors hover:bg-ai-bg disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-ai-deep"
+              >
+                この局面から開始
+              </button>
+              <span className="text-[10px] text-subtle">
+                あなたは「その局面の手番側」を持ちます
+              </span>
+            </div>
+          </div>
+        </details>
       </section>
 
       <aside>

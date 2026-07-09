@@ -74,11 +74,14 @@ function App() {
     setMode('review');
   };
 
-  // レビューからの「この局面から対局」(Phase 2B): FEN を渡して対局へ切り替え。
-  // nonce で同一 FEN の再要求も発火させる(PlayView 側が nonce 変化で開始を検知)。
-  const [playFrom, setPlayFrom] = useState<{ fen: string; nonce: number } | null>(null);
-  const handlePlayFrom = (fen: string) => {
-    setPlayFrom((prev) => ({ fen, nonce: (prev?.nonce ?? 0) + 1 }));
+  // レビューからの「この局面から対局」(Phase 2B: チェス / Phase 4-3: 将棋): 局面を渡して対局へ切り替え。
+  // nonce で同一局面の再要求も発火させる(PlayView 側が nonce 変化で開始を検知)。
+  // kind: チェスなら fen は FEN、将棋なら fen は SFEN。PlayView がこの kind で振り分ける。
+  const [playFrom, setPlayFrom] = useState<{ fen: string; nonce: number; kind: GameKind } | null>(
+    null,
+  );
+  const handlePlayFrom = (fen: string, kind: GameKind) => {
+    setPlayFrom((prev) => ({ fen, kind, nonce: (prev?.nonce ?? 0) + 1 }));
     setMode('play');
   };
 

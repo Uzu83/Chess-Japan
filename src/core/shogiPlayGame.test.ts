@@ -1,4 +1,4 @@
-import { ShogiPlayGame } from './shogiPlayGame';
+import { ShogiPlayGame, validateStartSfen } from './shogiPlayGame';
 import { shogiGameModel } from './shogiGame';
 
 /*
@@ -212,6 +212,21 @@ describe('ShogiPlayGame KIF 往復', () => {
     expect(model.kind).toBe('shogi');
     expect(model.moves.map((m) => m.engineMove)).toEqual(['7g7f', '3c3d', '8h2b+', '3a2b']);
   });
+
+  it('カスタム開始局面（非平手・後手番）も exportKif→振り返りで開始局面が復元される（Phase 4-3 入口A/B の振り返り接続）', () => {
+    // 中盤・後手番の局面から対局 → 1手 → KIF 出力 → 振り返りモデルで開始局面(fenAt(0))が一致することを保証。
+    // node 実測（scratchpad/sfen-kif-spike.mjs）で tsshogi の exportKIF/importKIF が非平手開始を保存する
+    // ことは確認済み。ここでは本アプリの exportKif→shogiGameModel 経路でも成立することを固定する。
+    const startSfen = 'lnsgkgsnl/1r5b1/pppppp1pp/6p2/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 1';
+    const g = new ShogiPlayGame(startSfen);
+    expect(g.turn).toBe('gote'); // w=後手番＝あなたの手番
+    const normalized = g.sfen; // tsshogi 正規化後の開始局面（手数カウンタ等）
+    expect(normalized).not.toBe('lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1'); // 平手ではない
+    expect(g.applyUsi('8c8d')).toBe(true); // 後手の歩push（合法手）
+    const model = shogiGameModel(g.exportKif());
+    expect(model.fenAt(0)).toBe(normalized); // 開始局面が保存・復元される＝振り返りで同じ盤が出る
+    expect(model.moves.map((m) => m.engineMove)).toEqual(['8c8d']);
+  });
 });
 
 describe('ShogiPlayGame snapshot', () => {
@@ -227,5 +242,79 @@ describe('ShogiPlayGame snapshot', () => {
     expect(s.history).toHaveLength(1);
     // 後手番の合法手 dests が入っている（例: ８四歩）
     expect(s.legalDests.get('8c')).toContain('8d');
+  });
+});
+
+describe('validateStartSfen（Phase 4-3・局面から対局の開始 SFEN 検証）', () => {
+  it('平手初期局面は ok で手番は先手（b）', () => {
+    const v = validateStartSfen(STANDARD_SFEN);
+    expect(v).toEqual({ ok: true, turn: 'sente' });
+  });
+
+  it('両玉ありの中盤局面（w 手番）は ok で手番は後手', () => {
+    // 平手から数手進んだ両玉あり局面（node 実測で newBySFEN OK・k/K 各1枚）。
+    const mid = 'lnsgkgsnl/1r5b1/pppppp1pp/6p2/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 4';
+    const v = validateStartSfen(mid);
+    expect(v).toEqual({ ok: true, turn: 'gote' });
+  });
+
+  it('両玉のみの最小局面も ok（詰将棋・練習の土台）', () => {
+    const v = validateStartSfen('4k4/9/9/9/9/9/9/9/4K4 b - 1');
+    expect(v).toEqual({ ok: true, turn: 'sente' });
+  });
+
+  it('前後の空白を許容する（trim される）', () => {
+    const v = validateStartSfen(`  ${STANDARD_SFEN}  `);
+    expect(v.ok).toBe(true);
+  });
+
+  it('構文不正な SFEN は ok:false（解釈不可）', () => {
+    for (const bad of ['not a sfen', '', 'lnsgkgsnl/9 b - 1']) {
+      const v = validateStartSfen(bad);
+      expect(v.ok).toBe(false);
+      if (!v.ok) expect(v.reason).toBe('SFEN を解釈できませんでした');
+    }
+  });
+
+  it('片玉（後手玉のみ・攻方玉なしの純詰将棋型）は ok:false（各1枚必要）', () => {
+    // 4k4 は後手玉のみ、先手玉 K が盤に無い。newBySFEN は通してしまうので個数で弾く。
+    const v = validateStartSfen('4k4/9/4P4/9/9/9/9/9/9 b G2r2b4g4s4n4l17p 1');
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.reason).toBe('先手玉・後手玉がそれぞれ 1 枚ずつ必要です');
+  });
+
+  it('重複玉（先手玉2枚）は ok:false（Codex ゲート① F002・presence では不十分）', () => {
+    // newBySFEN は重複玉を null にしないため、個数チェックが無いとやねうら王へ非合法局面が渡る。
+    const v = validateStartSfen('4k4/9/9/9/9/9/9/9/4KK3 b - 1');
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.reason).toBe('先手玉・後手玉がそれぞれ 1 枚ずつ必要です');
+  });
+
+  it('重複玉（後手玉2枚）も ok:false', () => {
+    const v = validateStartSfen('4kk3/9/9/9/9/9/9/9/4K4 b - 1');
+    expect(v.ok).toBe(false);
+  });
+
+  it('物理的に不可能な持ち駒数（歩99枚）は ok:false（Codex ゲート② F002）', () => {
+    // newBySFEN は駒数上限を検査しないので、持ち駒トークンの過剰を個別に弾く。
+    const v = validateStartSfen('4k4/9/9/9/9/9/9/9/4K4 b 99P 1');
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.reason).toBe('駒の数が上限を超えています（不正な局面）');
+  });
+
+  it('盤上と持ち駒の合算が上限超過（歩 合計19枚）も ok:false', () => {
+    // 平手（盤上に歩18枚＝先手9・後手9）＋先手持ち歩1＝19枚で上限18を超える（盤＋持ち駒の合算判定）。
+    const v = validateStartSfen('lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b P 1');
+    expect(v.ok).toBe(false);
+  });
+
+  it('上限内の持ち駒（金2・歩2）は ok', () => {
+    const v = validateStartSfen('4k4/9/9/9/9/9/9/9/4K4 b 2G2P 1');
+    expect(v).toEqual({ ok: true, turn: 'sente' });
+  });
+
+  it('平手初期局面は各駒種ちょうど上限だが ok（境界・以下判定）', () => {
+    // 歩18・香桂銀金4・角飛2 が全てちょうど上限。n>max は false なので通る。
+    expect(validateStartSfen(STANDARD_SFEN).ok).toBe(true);
   });
 });
