@@ -30,7 +30,7 @@
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 // tsshogi は ESM。やねうら王 glue は CJS なので createRequire で読む。
-const { Record, Move, Color, Square } = await import('tsshogi');
+const { Record, Position, Move, Color, Square } = await import('tsshogi');
 const YaneuraOu = require('@mizarjp/yaneuraou.k-p/lib/yaneuraou.k-p.js');
 
 /** 持ち駒として打てる駒ロール（玉・成駒は持ち駒にならない）。 */
@@ -109,9 +109,10 @@ async function startEngine() {
   };
 }
 
-/** 1 局対局。cfgBlack=先手, cfgWhite=後手。winner: 'black'|'white'|null(引分)。 */
-async function playGame(engine, cfgBlack, cfgWhite, maxPlies = 320) {
-  const rec = new Record();
+/** 1 局対局。cfgBlack=先手, cfgWhite=後手。startSfen 省略で平手。winner: 'black'|'white'|null(引分)。 */
+async function playGame(engine, cfgBlack, cfgWhite, maxPlies = 320, startSfen) {
+  const startPos = startSfen ? Position.newBySFEN(startSfen) : null;
+  const rec = startPos ? new Record(startPos) : new Record();
   for (;;) {
     const pos = rec.position;
     const loserIsToMove = () => (pos.color === Color.BLACK ? 'white' : 'black');
@@ -133,24 +134,52 @@ async function playGame(engine, cfgBlack, cfgWhite, maxPlies = 320) {
   }
 }
 
-/** アプリ（ShogiPlaySession の DIFFICULTIES）と一致させるプリセット。goNodes は max の測定用キャップ。 */
+/*
+ * アプリ（ShogiPlaySession の DIFFICULTIES）と一致させるプリセット。
+ *   nodes/goNodes = NodesLimit（探索量の弱さレバー）。movetime = アプリの movetimeMs。
+ *
+ * 計測モード（Codex ゲート② F001 対応）: 既定は go nodes（決定的・高速）。
+ *   ・easy/normal/hard は 40k-280k ノード（≈40-280ms）で、アプリの movetime(400-1000ms)より
+ *     NodesLimit が先に効く＝node 計測はアプリと忠実。
+ *   ・max はアプリで NodesLimit=0・movetime 1500ms（時間律速）。node モードでは goNodes=500k に
+ *     キャップするため過小測定になる。max を忠実に測るには MEASURE_MOVETIME=1（movetime モード）。
+ *   env MEASURE_MOVETIME=1 で全プリセットを go movetime（アプリ完全再現・ただし max は遅い）で測る。
+ */
+const MOVETIME_MODE = process.env.MEASURE_MOVETIME === '1';
 const PRESETS = {
-  easy: { skill: 2, nodes: 40_000, goNodes: 40_000 },
-  normal: { skill: 8, nodes: 160_000, goNodes: 160_000 },
-  hard: { skill: 14, nodes: 280_000, goNodes: 280_000 },
-  max: { skill: 20, nodes: 0, goNodes: 500_000 },
+  easy: { skill: 2, nodes: 40_000, goNodes: 40_000, movetimeMs: 400 },
+  normal: { skill: 8, nodes: 160_000, goNodes: 160_000, movetimeMs: 700 },
+  hard: { skill: 14, nodes: 280_000, goNodes: 280_000, movetimeMs: 1000 },
+  max: { skill: 20, nodes: 0, goNodes: 500_000, movetimeMs: 1500 },
 };
+/** cfg を計測モードに合わせて整える（movetime モードなら movetime を使い goNodes を無視）。 */
+function forMode(cfg) {
+  return MOVETIME_MODE ? { ...cfg, movetime: cfg.movetimeMs, goNodes: undefined } : cfg;
+}
 
-/** N 局・先後入替でペア対戦し、A の勝敗を集計。 */
+/*
+ * 開始局面のサンプル（Codex ゲート② F002 対応）。全局 hirate だと「初期局面からの特定展開」に
+ * 偏るため、代表的な開始局面を巡回サンプリングして局面種別の偏りを緩和する。
+ * 追加局面は「合法・両玉あり・序中盤」を選ぶ（tsshogi が Position.newBySFEN で受理する SFEN）。
+ * SFEN 空配列 or 未指定なら hirate のみ（従来互換）。必要なら定跡開始局面を足す。
+ */
+const OPENINGS = [
+  'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1', // 平手
+  'lnsgkgsnl/1r5b1/pppppp1pp/6p2/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL b - 1', // 相掛かり系の入り
+  'lnsgkgsnl/1r5b1/p1pppp1pp/1p4p2/9/2P4P1/PP1PPPP1P/1B5R1/LNSGKGSNL b - 1', // 角道保留・両端歩
+];
+
+/** N 局・先後入替＋開始局面巡回でペア対戦し、A の勝敗を集計。 */
 async function match(engine, nameA, nameB, games) {
-  const A = PRESETS[nameA];
-  const B = PRESETS[nameB];
+  const A = forMode(PRESETS[nameA]);
+  const B = forMode(PRESETS[nameB]);
   let aWins = 0;
   let bWins = 0;
   let draws = 0;
   for (let i = 0; i < games; i++) {
     const aIsBlack = i % 2 === 0; // 色相殺
-    const r = await playGame(engine, aIsBlack ? A : B, aIsBlack ? B : A);
+    const startSfen = OPENINGS[i % OPENINGS.length]; // 開始局面を巡回（局面偏り緩和）
+    const r = await playGame(engine, aIsBlack ? A : B, aIsBlack ? B : A, 320, startSfen);
     if (r.winner === null) draws++;
     else if ((r.winner === 'black') === aIsBlack) aWins++;
     else bWins++;
