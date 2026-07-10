@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { loadRatingFor, loadPlayedGames, playedGameKind } from '../core/storage';
 
 /*
@@ -46,9 +46,22 @@ vi.mock('../engine/factory', () => ({
   })),
 }));
 
-// ShogiPlayBoard は shogiground 依存。状態機械テストでは描画不要なのでスタブ化。
+// ShogiPlayBoard は shogiground 依存。状態機械テストでは描画不要なのでスタブ化する。
+// 盤操作を伴うテスト（待った）のため、最新の props（onUserMove 等）を共有ホルダに捕まえて
+// テストから直接呼べるようにする。vi.hoisted でホルダを生成し、mock factory とテストで共有する。
+const boardHolder = vi.hoisted(() => ({
+  props: null as null | {
+    turnColor: 'sente' | 'gote';
+    movable: boolean;
+    onUserMove: (from: string, to: string, promote?: boolean) => void;
+    onUserDrop: (role: string, to: string) => void;
+  },
+}));
 vi.mock('./ShogiPlayBoard', () => ({
-  ShogiPlayBoard: () => null,
+  ShogiPlayBoard: (props: (typeof boardHolder)['props']) => {
+    boardHolder.props = props;
+    return null;
+  },
 }));
 
 // ↑ の mock/hoisted が効いた状態で import する（static import で問題ないが、意図を明示）。
@@ -101,6 +114,7 @@ beforeEach(() => {
   engineChooseMove.mockReset();
   engineChooseMove.mockResolvedValue(null); // 既定: AI は指さない（0手投了テスト用）
   onReview.mockReset();
+  boardHolder.props = null;
 });
 
 /** エンジン準備が終わり「対局開始」が活性化するまで待って、そのボタンを返す。 */
@@ -161,5 +175,55 @@ describe('ShogiPlaySession 状態機械', () => {
     // AI の chooseMove が呼ばれ、棋譜に ☗７六歩 が現れる。
     await waitFor(() => expect(engineChooseMove).toHaveBeenCalled());
     expect(await screen.findByText('☗７六歩')).toBeInTheDocument();
+  });
+
+  it('待った を使うとレート戦でもレートが動かない（公平性・降格）', async () => {
+    engineChooseMove.mockResolvedValue('3c3d'); // AI(後手)の応手 ☖３四歩
+    render(<ShogiPlaySession onReview={onReview} />);
+    // 既定=レート戦・先手で開始。
+    fireEvent.click(await waitForStartEnabled());
+    // あなた(先手)が ☗７六歩。board スタブが捕まえた onUserMove を直接呼ぶ（盤操作の代わり）。
+    await waitFor(() => expect(boardHolder.props).not.toBeNull());
+    await act(async () => {
+      boardHolder.props!.onUserMove('7g', '7f');
+    });
+    // AI(後手)が応手 ☖３四歩 → 棋譜に現れる（着手の往復が成立している確認も兼ねる）。
+    expect(await screen.findByText('☖３四歩')).toBeInTheDocument();
+    // 待った（1ラウンド戻す）→ usedTakeback=true になり、以降レート戦でもレート変動なしに降格。
+    fireEvent.click(screen.getByRole('button', { name: '待った' }));
+    // 投了して終局させる。
+    fireEvent.click(screen.getByRole('button', { name: '投了' }));
+    expect(await screen.findByText('あなたの負け')).toBeInTheDocument();
+    // レート戦でも「待った」使用のためレートは動かない（保存されない＝null のまま）。
+    await new Promise((r) => setTimeout(r, 0));
+    expect(loadRatingFor('shogi')).toBeNull();
+  });
+
+  it('AI 思考中に「中断して新規」すると、後から届く AI の手は破棄される（stale token キャンセル）', async () => {
+    // chooseMove を「テストが好きなタイミングで解決できる」deferred にする。
+    let resolveMove!: (usi: string | null) => void;
+    engineChooseMove.mockImplementation(
+      () =>
+        new Promise<string | null>((res) => {
+          resolveMove = res;
+        }),
+    );
+    render(<ShogiPlaySession onReview={onReview} />);
+    await waitForStartEnabled();
+    // 後手で開始 → AI(先手)が思考開始（chooseMove は pending のまま）。
+    fireEvent.click(screen.getByRole('button', { name: '後手' }));
+    fireEvent.click(await waitForStartEnabled());
+    await waitFor(() => expect(engineChooseMove).toHaveBeenCalled());
+    // 思考中に「中断して新規」→ turnToken が進み、前局の AI 応答が無効化される。
+    fireEvent.click(screen.getByRole('button', { name: /中断して新規/ }));
+    // 設定画面へ戻る（対局開始が再び見える）。
+    await waitForStartEnabled();
+    // 遅れて届いた AI の手を解決 → stale token なので盤へ適用されない。
+    await act(async () => {
+      resolveMove('7g7f');
+    });
+    // 棋譜に ☗７六歩 は現れない（破棄された）。設定画面のまま。
+    expect(screen.queryByText('☗７六歩')).toBeNull();
+    expect(screen.getByRole('button', { name: '対局開始' })).toBeInTheDocument();
   });
 });
