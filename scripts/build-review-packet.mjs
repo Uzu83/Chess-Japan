@@ -88,13 +88,23 @@ if (vulns.CRITICAL > 0) blockers.push(`CRITICAL 脆弱性 ${vulns.CRITICAL} 件`
 // 同一検出が両方に載って二重カウントされうるが、ブロック判定は >0 の閾値なので
 // 過大カウントは安全側（fail-safe）— de-dup の複雑さより単純さを取る。
 let secretCount = secretsFromTrivy;
+let gitleaksFound = false;
 for (const p of ['artifacts/secret/gitleaks.sarif', 'gitleaks.sarif']) {
   const raw = readIf(p);
   if (raw) {
     const sarif = JSON.parse(raw);
     for (const run of sarif.runs ?? []) secretCount += (run.results ?? []).length;
+    gitleaksFound = true;
   }
 }
+// fail-closed: gitleaks SARIF が1つも無ければ「secret 0 件」ではなく「欠損」扱いにする。
+// WHY（toilet-map の Codex Gate-2 指摘と統合・2026-07-10）: Trivy fs の secret 検出は
+// ワーキングツリーのみで、security.yml が別途走らせる gitleaks の「履歴込み」スキャンの
+// 代替にならない。gitleaks 成果物を落としたまま packet を組むと secretCount が Trivy 分
+// だけになり「Secret 検出: 0 件」で approvable になりうる fail-open。上の F001（break
+// 除去・全 SARIF 合算）が (b)stale-clean を塞ぐのに対し、これは (a)SARIF 皆無 を塞ぐ相補
+// 対策。両者そろって初めて gitleaks 集計が fail-closed になる。
+if (!gitleaksFound) missing.push('Gitleaks secret スキャン (gitleaks.sarif)');
 if (secretCount > 0) blockers.push(`Secret 検出 ${secretCount} 件（絶対ブロック）`);
 
 // --- 4. SBOM -------------------------------------------------------------------
