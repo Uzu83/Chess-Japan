@@ -57,15 +57,19 @@ interface Difficulty {
 }
 
 /*
- * 難易度の値の根拠（WHY この数字か・重要な暫定性の明記）:
- *   SkillLevel はやねうら王がわざと弱く指すレバー。チェスの Stockfish と同じ発想だが、
- *   **やねうら王の SkillLevel×NodesLimit の実効強さ（対人 Elo 換算）は本アプリではまだ未実測**。
- *   下の elo/skill は chess 側プリセット（skill 1/6/12/20 ≈ 800/1400/1900/2800）に倣った
- *   「暫定・要実測」の目安であり確定値ではない。将棋の実対局データが取れ次第、
- *   ①elo（レート計算の相手レート＝ユーザーのレート変動カーブを左右する）
- *   ②skill/movetime（体感の強さ）
- *   を実測に基づいて再調整すること。elo を動かすと rating の変動が変わるので rating.ts と併せて検討。
- *   「~」付き表記でユーザーにも目安であることを明示する（chess と同じ扱い）。
+ * 難易度の値の根拠（WHY この数字か）:
+ *   SkillLevel はやねうら王がわざと弱く指すレバー（+ NodesLimit で探索量も絞る＝skill×20000 ノード）。
+ *   下の elo（強さ表示 + レート戦の相手レート）は当初 chess 流用の暫定値だったが、
+ *   **2026-07-10 やねうら王 Node ヘッドレス自己対局で相対 Elo 差を実測・検証済み**
+ *   （scripts/measure-shogi-elo.mjs・16局/ペア。詳細は docs/PLAN.md の「難度Elo実測」節）:
+ *     ・順序どおり分離: easy < normal < hard < max（upset なし）。
+ *     ・normal→hard ≈ 470 Elo（実測）≈ 表示 gap 500（ほぼ一致）。
+ *     ・easy は normal/hard に 0/16（大差＝下位向けに十分弱い）。max は hard に 15-1（超強豪）。
+ *     ・gap の形状（中央=normal→hard が最小）も表示値と一致。
+ *   よって現行の目安 elo（800/1400/1900/2800）は相対強度と整合する妥当値と確認した（暫定→検証済みへ格上げ）。
+ *   絶対 Elo は将棋では基準が曖昧（将棋ウォーズ/81dojo/floodgate で桁違い）なので「~」目安表記は維持。
+ *   プリセット（skill/nodes/movetime）を変えたら measure-shogi-elo.mjs を再実行して回帰確認すること。
+ *   elo を動かすと rating の変動が変わるので rating.ts と併せて検討（elo=レート戦の相手レート）。
  */
 const DIFFICULTIES: Difficulty[] = [
   { key: 'easy', label: 'やさしい', skill: 2, movetimeMs: 400, desc: '入門〜初心者', elo: 800 },
