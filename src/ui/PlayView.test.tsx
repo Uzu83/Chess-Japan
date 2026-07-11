@@ -108,6 +108,28 @@ describe('PlayView 状態機械（チェス）', () => {
     });
   });
 
+  it('1手以上指してから投了した対局は履歴に保存される（0手スキップの正例・Codex F001）', async () => {
+    // 0手スキップの負例だけだと保存条件が moveCount>1 等へ誤変更されても全テスト通過してしまう。
+    // 1手以上の対局が確かに保存される正例を固定して、その退行を捕まえる。
+    engineChooseMove.mockResolvedValue('e7e5'); // AI(黒)が応手 → 2手指した状態に
+    render(<PlayView onReview={onReview} />);
+    fireEvent.click(await waitForStartEnabled());
+    await waitFor(() => expect(boardHolder.props).not.toBeNull());
+    await act(async () => {
+      boardHolder.props!.onUserMove('e2', 'e4'); // あなた(白)が e4
+    });
+    expect(await screen.findByText('e5')).toBeInTheDocument(); // AI が e5（moveCount=2）
+    fireEvent.click(screen.getByRole('button', { name: '投了' }));
+    expect(await screen.findByText('あなたの負け')).toBeInTheDocument();
+    // 1手以上あるので履歴に1件保存され moveCount>0、「この対局を振り返る」導線が出る。
+    await waitFor(() => {
+      const saved = loadPlayedGames().filter((g) => playedGameKind(g) === 'chess');
+      expect(saved).toHaveLength(1);
+      expect(saved[0].moveCount).toBeGreaterThan(0);
+    });
+    expect(screen.getByRole('button', { name: 'この対局を振り返る' })).toBeInTheDocument();
+  });
+
   it('カジュアルで投了してもレートは動かない（保存もされない）', async () => {
     render(<PlayView onReview={onReview} />);
     await waitForStartEnabled();

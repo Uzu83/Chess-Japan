@@ -149,6 +149,27 @@ describe('ShogiPlaySession 状態機械', () => {
     });
   });
 
+  it('1手以上指してから投了した対局は履歴に保存される（0手スキップの正例・Codex F001）', async () => {
+    // 0手スキップの負例だけだと保存条件が moveCount>1 等へ誤変更されても全テスト通過してしまう。
+    // 1手以上の対局が確かに保存される正例を固定して、その退行を捕まえる（チェス版と対称）。
+    engineChooseMove.mockResolvedValue('3c3d'); // AI(後手)が応手 → 2手指した状態に
+    render(<ShogiPlaySession onReview={onReview} />);
+    fireEvent.click(await waitForStartEnabled());
+    await waitFor(() => expect(boardHolder.props).not.toBeNull());
+    await act(async () => {
+      boardHolder.props!.onUserMove('7g', '7f'); // あなた(先手)が ☗７六歩
+    });
+    expect(await screen.findByText('☖３四歩')).toBeInTheDocument(); // AI が応手（moveCount=2）
+    fireEvent.click(screen.getByRole('button', { name: '投了' }));
+    expect(await screen.findByText('あなたの負け')).toBeInTheDocument();
+    await waitFor(() => {
+      const saved = loadPlayedGames().filter((g) => playedGameKind(g) === 'shogi');
+      expect(saved).toHaveLength(1);
+      expect(saved[0].moveCount).toBeGreaterThan(0);
+    });
+    expect(screen.getByRole('button', { name: 'この対局を振り返る' })).toBeInTheDocument();
+  });
+
   it('カジュアルで投了してもレートは動かない（保存もされない）', async () => {
     render(<ShogiPlaySession onReview={onReview} />);
     await waitForStartEnabled();
