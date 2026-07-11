@@ -1,6 +1,5 @@
 User-agent: *
 Allow: /
 
-# Sitemap: https://chess-japan.pages.dev/sitemap.xml
-# (将来 sitemap.xml を生成した際にコメントアウトを解除すること)
-# SPA のため現時点では単一 URL のみ。将棋対応・複数ルート追加後に sitemap 生成を検討。
+Sitemap: https://chess-japan.pages.dev/sitemap.xml
+# sitemap.xml は public/sitemap.xml（/ と /privacy.html）。カスタムドメイン取得後は sitemap の loc も更新。
