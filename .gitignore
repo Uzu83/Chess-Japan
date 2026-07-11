@@ -52,3 +52,6 @@ supabase/.temp
 # Actions artifacts（retention 30〜90日）と Security タブが保存先。
 # リポジトリに入れると diff ノイズ + 古い成果物を最新と誤読する事故のもと。
 artifacts/
+
+# UI 監査等の一時スクショ・作業ファイル（セッション tmp 代替として使うことがある）
+scratchpad/
