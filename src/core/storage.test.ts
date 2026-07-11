@@ -265,6 +265,31 @@ describe('encodeShareParam / decodeShareParam', () => {
     expect(decodeShareParam(chessEnc)?.kind).toBe('chess');
     expect(decodeShareParam(shogiEnc)?.kind).toBe('shogi');
   });
+
+  // ── 受信側の入力上限（Codex ゲート② F001・自己DoS防止） ──
+
+  it('maxChars を超える復号後テキストは null（受信側の上限。既定 Infinity では従来通り通す）', () => {
+    const bigPgn = 'x'.repeat(6000);
+    const enc = encodeShareParam('chess', bigPgn);
+    expect(decodeShareParam(enc, 5000)).toBeNull(); // 復号後 6000 > 5000 → 拒否
+    expect(decodeShareParam(enc)).toEqual({ kind: 'chess', text: bigPgn }); // 既定は上限なし＝後方互換
+  });
+
+  it('巨大なエンコード入力は復号前に precheck で弾く（復号コスト回避）', () => {
+    const huge = `s~${'A'.repeat(50000)}`;
+    expect(decodeShareParam(huge, 5000)).toBeNull();
+  });
+
+  it('上限内はこれまで通りラウンドトリップする（チェス/将棋とも）', () => {
+    expect(decodeShareParam(encodeShareParam('chess', PGN), 5000)).toEqual({
+      kind: 'chess',
+      text: PGN,
+    });
+    expect(decodeShareParam(encodeShareParam('shogi', KIF), 5000)).toEqual({
+      kind: 'shogi',
+      text: KIF,
+    });
+  });
 });
 
 // ── 対局履歴(PlayedGame) ─────────────────────────────────────

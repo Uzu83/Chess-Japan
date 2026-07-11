@@ -437,10 +437,23 @@ export function encodeShareParam(kind: GameKind, text: string): string {
 }
 
 /**
- * 共有リンクの `g=` パラメータ本体を { kind, text } に復号する。破損・無効は null。
+ * 共有リンクの `g=` パラメータ本体を { kind, text } に復号する。破損・無効・上限超過は null。
  * プレフィックス無し or 'c~' → チェス（旧URL互換）、's~' → 将棋。
+ *
+ * WHY 受信側の入力上限 maxChars か（Codex ゲート② F001・自己DoS防止）:
+ *   共有URLは第三者が自由に作れる。送信側は SHARE_MAX_CHARS で棋譜長を制限しているが、受信側で
+ *   締めないと「数MB級の base64 を仕込んだリンク」で復号 + パーサ（tsshogi/chess.js）にメインスレッドを
+ *   長時間占有させ、開いたタブを固められる。そこで受信時も送信と対称に上限をかける:
+ *     ① エンコード長で粗く precheck して復号コスト自体を避ける（base64url は元テキスト長の最大 ~5.4 倍＝
+ *        UTF-8 4byte 文字 × 4/3。余裕をみて 8 倍で弾く）。
+ *     ② 復号後の本文長で厳密に締める。
+ *   maxChars 既定 Infinity＝上限なし（呼び出し側が明示したときだけ有効。既存のラウンドトリップ・テストは不変）。
  */
-export function decodeShareParam(param: string): { kind: GameKind; text: string } | null {
+export function decodeShareParam(
+  param: string,
+  maxChars = Infinity,
+): { kind: GameKind; text: string } | null {
+  if (Number.isFinite(maxChars) && param.length > maxChars * 8) return null; // ① precheck
   let kind: GameKind = 'chess';
   let body = param;
   if (param.startsWith('s~')) {
@@ -451,7 +464,8 @@ export function decodeShareParam(param: string): { kind: GameKind; text: string 
     body = param.slice(2);
   }
   const text = decodePgnFromUrl(body);
-  return text === null ? null : { kind, text };
+  if (text === null || text.length > maxChars) return null; // ② 本文長で厳密に締める
+  return { kind, text };
 }
 
 // ── localStorage 操作(副作用) ─────────────────────────────────

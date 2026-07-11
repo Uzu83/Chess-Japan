@@ -455,7 +455,9 @@ export function ReviewView({
     //    decodeShareParam がチェスとして復元するので後方互換。
     const hashMatch = window.location.hash.match(/[#&]g=([A-Za-z0-9\-_~]*)/);
     if (hashMatch?.[1]) {
-      const parsed = decodeShareParam(hashMatch[1]);
+      // 受信側の入力上限 SHARE_MAX_CHARS を渡す（Codex ゲート② F001・巨大共有URLによる自己DoS防止）。
+      // 上限超過・破損は null → 下の session/sample フォールバックへ安全に落ちる。
+      const parsed = decodeShareParam(hashMatch[1], SHARE_MAX_CHARS);
       if (parsed) {
         if (parsed.kind === 'shogi') {
           // 将棋リンク: kindRef を setKind より先に同期で倒してから loadShogi する
