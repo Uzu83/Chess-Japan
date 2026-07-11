@@ -15,10 +15,10 @@
     <!-- ── 基本メタ ──
          title: 主要キーワード(棋譜・AI・解説)を前半に置く。
          description: 50-160 字・自然な文体・検索意図(棋譜解説/AI/無料/Stockfish)を含む。 -->
-    <title>Chess-Japan｜チェス・将棋の棋譜をAIが1手ずつ解説する無料ツール</title>
+    <title>Chess-Japan｜チェス・将棋をAIが1手ずつ解説・AIと対局できる無料ツール</title>
     <meta
       name="description"
-      content="チェス・将棋の棋譜（PGN）を読み込むだけ。Stockfish の評価値をもとに LLM が1手ずつ日本語で解説。悪手の理由・最善手・評価値グラフを無料で確認できる棋譜レビューツール。"
+      content="チェス・将棋の棋譜（PGN/KIF/CSA/SFEN）をAIが1手ずつ日本語で解説。AIと対局（強さ4段階・レート戦）や、任意の局面・詰将棋からの対局も無料。Stockfish・やねうら王の評価値・最善手・悪手の理由が一目で分かります。"
     />
 
     <!-- カラースキーム: ライト/ダーク両対応を宣言（index.css の color-scheme と連動） -->
@@ -45,11 +45,11 @@
     <meta property="og:site_name" content="Chess-Japan" />
     <meta
       property="og:title"
-      content="Chess-Japan｜チェス・将棋の棋譜をAIが1手ずつ解説する無料ツール"
+      content="Chess-Japan｜チェス・将棋をAIが1手ずつ解説・AIと対局できる無料ツール"
     />
     <meta
       property="og:description"
-      content="棋譜（PGN）を貼るだけ。Stockfish の評価値 × LLM が1手ずつ日本語で解説します。悪手の理由・最善手・評価値グラフを無料で確認。"
+      content="棋譜を貼れば1手ずつAI解説。チェス・将棋のAI対局（強さ4段階・レート戦）や、任意の局面・詰将棋からの対局も無料。評価値・最善手・悪手の理由がすぐ分かる。"
     />
     <meta property="og:url" content="https://chess-japan.pages.dev/" />
     <meta property="og:locale" content="ja_JP" />
@@ -68,11 +68,11 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta
       name="twitter:title"
-      content="Chess-Japan｜チェス・将棋の棋譜をAIが1手ずつ解説する無料ツール"
+      content="Chess-Japan｜チェス・将棋をAIが1手ずつ解説・AIと対局できる無料ツール"
     />
     <meta
       name="twitter:description"
-      content="棋譜（PGN）を貼るだけ。Stockfish の評価値 × LLM が1手ずつ日本語で解説します。悪手の理由・最善手・評価値グラフを無料で確認。"
+      content="棋譜を貼れば1手ずつAI解説。チェス・将棋のAI対局（強さ4段階・レート戦）や、任意の局面・詰将棋からの対局も無料。評価値・最善手・悪手の理由がすぐ分かる。"
     />
     <meta name="twitter:image" content="https://chess-japan.pages.dev/og.png" />
     <meta name="twitter:image:alt" content="Chess-Japan — チェス・将棋の棋譜をAIが1手ずつ解説" />
@@ -88,10 +88,18 @@
         "@type": "WebApplication",
         "name": "Chess-Japan",
         "url": "https://chess-japan.pages.dev/",
-        "description": "チェス・将棋の棋譜（PGN）を1手ずつ LLM が日本語で解説する無料 Web ツール。Stockfish の評価値・最善手・悪手の理由を分かりやすく解説します。",
+        "description": "チェス・将棋の棋譜（PGN/KIF/CSA/SFEN）を1手ずつ AI が日本語で解説し、AI との対局（強さ4段階・レート戦/カジュアル）や任意の局面・詰将棋からの対局もできる無料 Web ツール。Stockfish・やねうら王の評価値・最善手・悪手の理由が分かります。",
         "applicationCategory": "GameApplication",
         "operatingSystem": "Web",
         "inLanguage": "ja",
+        "featureList": [
+          "チェス・将棋の棋譜を1手ずつAIが日本語で解説",
+          "AIと対局（強さ4段階・レート戦/カジュアル・盤反転）",
+          "任意の局面（FEN/SFEN）や詰将棋からの対局",
+          "評価値グラフ・手の質分類・精度サマリ",
+          "PGN / KIF / CSA / SFEN の棋譜読み込み",
+          "Stockfish（チェス）・やねうら王（将棋）をブラウザで実行"
+        ],
         "offers": {
           "@type": "Offer",
           "price": "0",
