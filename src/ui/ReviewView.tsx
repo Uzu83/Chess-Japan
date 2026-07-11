@@ -841,7 +841,8 @@ export function ReviewView({
             type="button"
             aria-label="ヒントを閉じる"
             onClick={() => setHintDismissed(true)}
-            className="focus-ai shrink-0 rounded px-2 py-0.5 text-xs text-ai opacity-60 transition-opacity hover:opacity-100 dark:text-ai-muted"
+            /* min-h-9: 44px には満たないがバナー内の副次操作として最低限のタップ領域を確保(UI 監査) */
+            className="focus-ai min-h-9 shrink-0 rounded px-3 text-xs text-ai opacity-60 transition-opacity hover:opacity-100 dark:text-ai-muted"
           >
             閉じる
           </button>
@@ -877,7 +878,19 @@ export function ReviewView({
           ))}
         </div>
 
-        <span className="text-xs text-subtle">
+        {/* エンジン状態表示。
+            WHY aria-live + パルスドット (2026-07-11 UI 監査):
+              初回訪問時 Stockfish/やねうら王 WASM の DL+起動に数秒かかり、その間「全手を解析」等が
+              disabled になるだけで無言だと「固まった」と誤認される(実機で確認)。読み込み中はパルスする
+              ドットで進行を可視化し、span 自体を aria-live="polite" にして状態変化(読み込み中→WASM名)を
+              スクリーンリーダーへ通知する。ドットは装飾なので aria-hidden。 */}
+        <span className="flex items-center gap-1.5 text-xs text-subtle" aria-live="polite">
+          {engineKind === 'loading' && (
+            <span
+              aria-hidden="true"
+              className="inline-block h-2.5 w-2.5 rounded-full bg-current motion-safe:animate-pulse"
+            />
+          )}
           {engineKind === 'loading'
             ? '読み込み中…'
             : engineKind === 'stockfish'
@@ -925,7 +938,10 @@ export function ReviewView({
         <section className="flex flex-col gap-4">
           {/* 評価バー(左) + 盤(右) */}
           <div className="mx-auto flex w-full max-w-[500px] items-stretch gap-2">
-            <div className="w-3 flex-none">
+            {/* 評価バー。WHY モバイルで隠すか(2026-07-11 UI 監査): 12px 幅の縦バーは 375px 実機で
+                「ボーダー/バグ」にしか見えず機能を果たさない。真下の評価グラフが同じ情報を担うので、
+                sm 未満では隠して盤に幅を譲る(sm 以上は従来どおり表示)。 */}
+            <div className="hidden w-3 flex-none sm:block">
               <EvalBar evalCp={evalCpWhite} game={kind} />
             </div>
             <div className="min-w-0 flex-1">
@@ -997,26 +1013,32 @@ export function ReviewView({
             >
               ⇅
             </button>
-            {/* この局面から対局(Phase 2B: チェス / Phase 4-3: 将棋・④「復習で再開」の実装)
-                現在表示中の局面(チェス=FEN / 将棋=SFEN)を kind と共に PlayView へ渡してカジュアル対局を開始。
-                「悪手の場面から自分ならどう指すか試す」という復習ループの核。
-                WHY 将棋は COI_ENABLED 条件付きか: 将棋対局はやねうら王(SharedArrayBuffer 必須)を使う。
-                  coi=false(Safari 等)では ShogiPlaySession が対局を開始できない(入口A effect が !COI_ENABLED で
-                  封じる)ので、クリックしても始まらない dead 導線を出さないよう、将棋のときだけ環境で隠す。
-                  チェスは coi 不要で常時可(lite-single)。将棋の閲覧・棋譜レビュー自体は coi 不要なので、
-                  導線だけを coi で封じる非対称は Phase 4-2 と一貫。 */}
-            {onPlayFrom && (kind === 'chess' || (kind === 'shogi' && COI_ENABLED)) && (
+          </div>
+
+          {/* この局面から対局(Phase 2B: チェス / Phase 4-3: 将棋・④「復習で再開」の実装)
+              現在表示中の局面(チェス=FEN / 将棋=SFEN)を kind と共に PlayView へ渡してカジュアル対局を開始。
+              「悪手の場面から自分ならどう指すか試す」という復習ループの核。
+              WHY ナビと別の独立行にするか(2026-07-11 UI 監査・回帰防止): ナビ4ボタン+カウンタ+盤反転と
+                同一行に入れると 375px 幅で行が溢れ、このボタンが縦に潰れて表示される(本番で再現)。この導線は
+                「表示局面からの派生アクション」でナビとは意味レイヤが違うので、独立行に分けモバイルは全幅にする。
+              WHY 将棋は COI_ENABLED 条件付きか: 将棋対局はやねうら王(SharedArrayBuffer 必須)を使う。
+                coi=false(Safari 等)では ShogiPlaySession が対局を開始できない(入口A effect が !COI_ENABLED で
+                封じる)ので、クリックしても始まらない dead 導線を出さないよう、将棋のときだけ環境で隠す。
+                チェスは coi 不要で常時可(lite-single)。将棋の閲覧・棋譜レビュー自体は coi 不要なので、
+                導線だけを coi で封じる非対称は Phase 4-2 と一貫。 */}
+          {onPlayFrom && (kind === 'chess' || (kind === 'shogi' && COI_ENABLED)) && (
+            <div className="flex justify-center">
               <button
                 type="button"
                 onClick={() => model && onPlayFrom(model.fenAt(index), kind)}
                 disabled={!model}
                 title="表示中の局面から AI と対局（カジュアル・あなたは手番側）"
-                className="focus-ai ml-1 min-h-11 rounded-lg border border-ai px-3 text-sm font-medium text-ai transition-colors hover:bg-ai-bg disabled:opacity-30 dark:border-ai-muted dark:text-ai-muted dark:hover:bg-ai-deep"
+                className="focus-ai min-h-11 w-full rounded-lg border border-ai px-3 text-sm font-medium text-ai transition-colors hover:bg-ai-bg disabled:opacity-30 sm:w-auto dark:border-ai-muted dark:text-ai-muted dark:hover:bg-ai-deep"
               >
                 ▶ この局面から対局
               </button>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* 評価グラフ
               解析済みデータが増えるにつれてリアルタイムで更新される。
@@ -1042,7 +1064,7 @@ export function ReviewView({
               open
               className="group rounded-xl border border-border bg-surface-2 p-4 shadow-card"
             >
-              <summary className="focus-ai -m-1 cursor-pointer rounded p-1 text-sm font-semibold text-on-surface">
+              <summary className="focus-ai -m-2 cursor-pointer rounded p-2 text-sm font-semibold text-on-surface">
                 棋譜を読み込む（PGN）
               </summary>
 
@@ -1055,8 +1077,9 @@ export function ReviewView({
                     <button
                       key={label}
                       type="button"
+                      aria-label={`${label} のサンプル棋譜をテキストエリアに読み込む`}
                       onClick={() => setPgnText(pgn)}
-                      className="focus-ai rounded border border-border px-2 py-1 text-[10px] text-muted transition-colors hover:border-ai hover:text-ai"
+                      className="focus-ai min-h-8 rounded border border-border px-2 text-[10px] text-muted transition-colors hover:border-ai hover:text-ai"
                     >
                       {label}
                     </button>
@@ -1126,7 +1149,7 @@ export function ReviewView({
                           ? `棋譜が ${SHARE_MAX_PGN_CHARS} 文字を超えているため共有できません`
                           : '現在の棋譜の共有リンクをクリップボードにコピー'
                       }
-                      className="focus-ai rounded-lg border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:border-ai hover:text-ai disabled:cursor-not-allowed disabled:opacity-40"
+                      className="focus-ai min-h-9 rounded-lg border border-border px-3 text-xs text-muted transition-colors hover:border-ai hover:text-ai disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       {shareCopied ? 'コピーしました！' : '共有リンクをコピー'}
                     </button>
@@ -1147,7 +1170,7 @@ export function ReviewView({
               open
               className="group rounded-xl border border-border bg-surface-2 p-4 shadow-card"
             >
-              <summary className="focus-ai -m-1 cursor-pointer rounded p-1 text-sm font-semibold text-on-surface">
+              <summary className="focus-ai -m-2 cursor-pointer rounded p-2 text-sm font-semibold text-on-surface">
                 棋譜を読み込む（KIF / CSA / SFEN）
               </summary>
 

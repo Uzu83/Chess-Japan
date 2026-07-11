@@ -27,9 +27,11 @@ export function AuthButton() {
     return (
       <div className="flex items-center gap-2">
         {/* auth 操作の失敗(プロバイダ未設定・ネットワーク等)は静かにテキストで示す。
-            title に全文(視覚的には省略されても hover/SR で読める)。 */}
+            title に全文(視覚的には省略されても hover/SR で読める)。
+            エラー色は他の失敗表示(解析エラー等)と同じ q-miss トークンに統一(2026-07-11 UI 監査。
+            ダークモードは変数側で切り替わる)。 */}
         {error && (
-          <span className="max-w-32 truncate text-xs text-red-600 dark:text-red-400" title={error}>
+          <span className="max-w-32 truncate text-xs text-[var(--q-miss-fg)]" title={error}>
             ログイン失敗
           </span>
         )}
@@ -37,7 +39,7 @@ export function AuthButton() {
           type="button"
           disabled={status === 'loading'}
           onClick={() => void signInWithGoogle()}
-          className="focus-ai min-h-9 rounded-lg border border-border px-3 text-sm font-medium text-muted transition-colors hover:border-ai hover:text-on-surface disabled:opacity-50"
+          className="focus-ai min-h-11 rounded-lg border border-border px-3 text-sm font-medium text-muted transition-colors hover:border-ai hover:text-on-surface disabled:opacity-50"
         >
           {status === 'loading' ? '確認中…' : 'ログイン'}
         </button>
@@ -54,7 +56,7 @@ export function AuthButton() {
         aria-expanded={menuOpen}
         aria-haspopup="menu"
         onClick={() => setMenuOpen((v) => !v)}
-        className="focus-ai flex min-h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-sm text-on-surface transition-colors hover:border-ai"
+        className="focus-ai flex min-h-11 items-center gap-1.5 rounded-lg border border-border px-3 text-sm text-on-surface transition-colors hover:border-ai"
       >
         {/* 名前は長くても崩れないよう truncate(サーバー側でも40字上限) */}
         <span className="max-w-28 truncate font-medium">{name}</span>
@@ -101,7 +103,7 @@ export function AuthButton() {
               setMenuOpen(false);
               void signOut();
             }}
-            className="focus-ai min-h-9 rounded-lg border border-border px-3 text-left text-sm text-muted transition-colors hover:border-ai hover:text-on-surface"
+            className="focus-ai min-h-11 rounded-lg border border-border px-3 text-left text-sm text-muted transition-colors hover:border-ai hover:text-on-surface"
           >
             ログアウト
           </button>

@@ -950,7 +950,8 @@ function SetupScreen({
         {/* ── FEN から対局(Phase 2B: 詰将棋・練習問題・途中局面) ──
             折りたたみで通常フローを邪魔しない。常にカジュアル(任意局面の有利不利が不明なため)。 */}
         <details className="rounded-xl border border-border bg-surface p-3">
-          <summary className="focus-ai -m-1 cursor-pointer rounded p-1 text-xs font-medium text-muted">
+          {/* text-sm + 広いヒット領域(2026-07-11 UI 監査): text-xs では詰将棋・練習用途の入口が埋もれる。 */}
+          <summary className="focus-ai -m-2 cursor-pointer rounded p-2 text-sm font-medium text-muted">
             局面(FEN)から対局する — 詰将棋・練習問題向け(カジュアル扱い)
           </summary>
           <div className="mt-2 flex flex-col gap-2">
@@ -1090,7 +1091,16 @@ function TurnIndicator({
           aiThinking && !isOver ? 'motion-safe:animate-pulse' : '',
         ].join(' ')}
       />
-      <span aria-live="polite">{text}</span>
+      {/* WHY 思考中は assertive + 藍で強調するか(2026-07-11 UI 監査):
+          小さなパルスドットだけだと AI 思考中に「フリーズした」と誤認されやすい(375px で顕著)。
+          思考中はテキストを font-medium + text-ai(藍)で視覚的に前へ出し、aria-live も assertive にして
+          スクリーンリーダーへ即時通知する(手番の変化は進行上重要度が高い)。それ以外の状態は polite。 */}
+      <span
+        aria-live={aiThinking && !isOver ? 'assertive' : 'polite'}
+        className={aiThinking && !isOver ? 'font-medium text-ai' : ''}
+      >
+        {text}
+      </span>
     </div>
   );
 }

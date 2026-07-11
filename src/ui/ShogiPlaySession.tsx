@@ -809,7 +809,8 @@ function ShogiSetupScreen({
             折りたたみで通常フローを邪魔しない。チェス PlayView の FEN 入力（:925-954）の写像。
             常にカジュアル（任意局面の有利不利が不明）。エンジン非対応環境では開始を封じる。 */}
         <details className="rounded-xl border border-border bg-surface p-3">
-          <summary className="focus-ai -m-1 cursor-pointer rounded p-1 text-xs font-medium text-muted">
+          {/* text-sm + 広いヒット領域(2026-07-11 UI 監査・PlayView の FEN 入口と対称)。 */}
+          <summary className="focus-ai -m-2 cursor-pointer rounded p-2 text-sm font-medium text-muted">
             局面(SFEN)から対局する — 詰将棋・練習問題向け(カジュアル扱い)
           </summary>
           <div className="mt-2 flex flex-col gap-2">
@@ -917,7 +918,15 @@ function ShogiTurnIndicator({
           aiThinking && !isOver ? 'motion-safe:animate-pulse' : '',
         ].join(' ')}
       />
-      <span aria-live="polite">{text}</span>
+      {/* 思考中の強調 + assertive 通知(2026-07-11 UI 監査・PlayView と対称)。
+          小さなパルスドットのみだと AI 思考中に固まったと誤認されやすいので、思考中は
+          font-medium + 藍で前へ出し aria-live を assertive にする。それ以外は polite。 */}
+      <span
+        aria-live={aiThinking && !isOver ? 'assertive' : 'polite'}
+        className={aiThinking && !isOver ? 'font-medium text-ai' : ''}
+      >
+        {text}
+      </span>
     </div>
   );
 }
