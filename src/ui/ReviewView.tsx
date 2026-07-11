@@ -18,8 +18,8 @@ import {
   saveContextsToStorage,
   loadSessionFromStorage,
   saveSessionToStorage,
-  encodePgnForUrl,
-  decodePgnFromUrl,
+  encodeShareParam,
+  decodeShareParam,
 } from '../core/storage';
 import { Board } from './Board';
 
@@ -98,11 +98,18 @@ const LEVEL_LABEL: Record<NonNullable<KnowledgeProfile['level']>, string> = {
 };
 
 /**
- * 共有URLに含められる PGN の最大文字数。
+ * 共有URLに含められる棋譜（PGN / KIF）の最大文字数。チェス・将棋 共通。
  * 5000文字 ≈ base64url で約 7000文字。一般的なブラウザの URL 上限 (≈2MB) より十分小さい。
  * 短い対局(〜100手)はほぼ全て収まる。超過時はコピーボタンを無効化+注記で通知する。
  */
-const SHARE_MAX_PGN_CHARS = 5000;
+const SHARE_MAX_CHARS = 5000;
+
+/** 現在ページの URL に `#g=<param>` を付けた共有URLを作る（既存の query は保持）。 */
+function buildShareUrl(param: string): string {
+  const url = new URL(window.location.href);
+  url.hash = `g=${param}`;
+  return url.toString();
+}
 
 /*
  * ReviewView — 棋譜振り返り画面
@@ -197,6 +204,10 @@ export function ReviewView({
 
   // 最後に正常ロードした PGN(セッション保存・コンテキスト保存のキー)
   const [loadedPgn, setLoadedPgn] = useState<string | null>(null);
+
+  // 最後に正常ロードした将棋 KIF。将棋は永続化しない設計なので、これは共有リンク生成専用の
+  // “最後に読めた棋譜”マーカー（loadedPgn とは独立に持ち、チェスの復元/保存を汚さない）。
+  const [loadedKif, setLoadedKif] = useState<string | null>(null);
 
   // ヒントバナー既読状態
   const [hintDismissed, setHintDismissed] = useState(false);
@@ -363,6 +374,7 @@ export function ReviewView({
       setThreads({});
       setError(null);
       setLoadedPgn(null); // 将棋は永続化しない（chess の復元を汚さない）
+      setLoadedKif(text); // 共有リンク用に「最後に正常ロードできた KIF」を記録（永続化ではない）
       ++bulkTokenRef.current;
       setAnalyzeAllProgress(null);
       ++analyzeToken.current;
@@ -371,6 +383,7 @@ export function ReviewView({
       setError(`将棋の棋譜を読み込めませんでした: ${(e as Error).message}`);
       setModel(null);
       setLoadedPgn(null);
+      setLoadedKif(null); // 読み込み失敗時は共有リンクを出さない
     } finally {
       // ローディング表示は「最新のロード」だけが畳む(古いロードが新しい表示を消さない)
       if (seq === shogiLoadSeqRef.current) setShogiLoading(false);
@@ -437,13 +450,24 @@ export function ReviewView({
       return;
     }
 
-    // 1. URL ハッシュ
-    const hashMatch = window.location.hash.match(/[#&]g=([A-Za-z0-9\-_]*)/);
+    // 1. URL ハッシュ（共有リンク。チェス=PGN / 将棋=KIF を種別プレフィックスで判別）
+    //    正規表現に '~'（decodeShareParam の種別区切り）を許可する。旧URL（プレフィックス無し）は
+    //    decodeShareParam がチェスとして復元するので後方互換。
+    const hashMatch = window.location.hash.match(/[#&]g=([A-Za-z0-9\-_~]*)/);
     if (hashMatch?.[1]) {
-      const decoded = decodePgnFromUrl(hashMatch[1]);
-      if (decoded) {
-        setPgnText(decoded);
-        loadPgn(decoded);
+      const parsed = decodeShareParam(hashMatch[1]);
+      if (parsed) {
+        if (parsed.kind === 'shogi') {
+          // 将棋リンク: kindRef を setKind より先に同期で倒してから loadShogi する
+          // （initialRecord の将棋分岐と同じ race ガード整合。await 越しに最新 kind を読むため）。
+          kindRef.current = 'shogi';
+          setKind('shogi');
+          setShogiText(parsed.text);
+          void loadShogi(parsed.text);
+        } else {
+          setPgnText(parsed.text);
+          loadPgn(parsed.text);
+        }
         return;
       }
     }
@@ -792,34 +816,39 @@ export function ReviewView({
   //   "ナビ後のデバウンス" のみ発火させたいため。最新値は ref 経由で参照。
   //   ref.current へのアクセスは ESLint の exhaustive-deps チェック外のため警告なし。
 
-  // ── 共有URL ──────────────────────────────────────────────────
+  // ── 共有URL（チェス=PGN / 将棋=KIF・後方互換の種別プレフィックス付き） ──
   /*
-   * loadedPgn が SHARE_MAX_PGN_CHARS 以下なら URL ハッシュ付き共有URLを生成。
+   * loadedPgn / loadedKif が SHARE_MAX_CHARS 以下なら URL ハッシュ付き共有URLを生成。
    * 超過時は null → ボタン無効化 + 注記。
    *
-   * WHY base64url か:
-   *   PGN はスペース・改行・特殊記号を含むため生のままではURLに使えない。
-   *   base64url はパディングなし・URL-safe で最も簡潔。
+   * WHY base64url + 種別プレフィックスか:
+   *   棋譜はスペース・改行・特殊記号を含むため生のままではURLに使えない。base64url は
+   *   パディングなし・URL-safe で最も簡潔。チェス/将棋の同居は encodeShareParam が
+   *   後方互換の '~' プレフィックスで解決する（storage.ts の共有コーデックのコメント参照）。
    */
   const shareUrl = useMemo(() => {
-    if (!loadedPgn || loadedPgn.length > SHARE_MAX_PGN_CHARS) return null;
-    const encoded = encodePgnForUrl(loadedPgn);
-    const url = new URL(window.location.href);
-    url.hash = `g=${encoded}`;
-    // 余分な query や hash を消して最小化
-    return url.toString();
+    if (!loadedPgn || loadedPgn.length > SHARE_MAX_CHARS) return null;
+    return buildShareUrl(encodeShareParam('chess', loadedPgn));
   }, [loadedPgn]);
 
-  const handleShareCopy = useCallback(async () => {
-    if (!shareUrl) return;
+  // 将棋の共有URL。loadedKif（最後に正常ロードした KIF）から生成。将棋は永続化しない設計なので
+  // loadedKif は共有ボタン専用の“最後に読めた棋譜”マーカーとして持つ（loadedPgn とは独立）。
+  const shogiShareUrl = useMemo(() => {
+    if (!loadedKif || loadedKif.length > SHARE_MAX_CHARS) return null;
+    return buildShareUrl(encodeShareParam('shogi', loadedKif));
+  }, [loadedKif]);
+
+  // クリップボードへ共有URLをコピー（チェス/将棋 共通。表示中セクションは片方だけなので copied 状態も共有）。
+  const handleShareCopy = useCallback(async (url: string | null) => {
+    if (!url) return;
     try {
-      await navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard.writeText(url);
       setShareCopied(true);
       setTimeout(() => setShareCopied(false), 2000);
     } catch {
       // clipboard API 未対応(古いブラウザ / 非 HTTPS)は無視
     }
-  }, [shareUrl]);
+  }, []);
 
   // ── JSX ──────────────────────────────────────────────────────
 
@@ -1134,7 +1163,7 @@ export function ReviewView({
                 </div>
 
                 {/* 共有リンク ─────────────────────────────────────────
-                  loadedPgn がある場合のみ表示。SHARE_MAX_PGN_CHARS を超える棋譜は
+                  loadedPgn がある場合のみ表示。SHARE_MAX_CHARS を超える棋譜は
                   ボタンを無効化し注記を表示(コピーすると URL が壊れる可能性を排除)。
                   WHY URL ハッシュか: クエリパラメータと違い、ハッシュはサーバーに
                   送信されないためバックエンド側の処理が不要。SPA 向きの方式。   */}
@@ -1142,11 +1171,11 @@ export function ReviewView({
                   <div className="flex flex-wrap items-center gap-2 border-t border-border pt-2">
                     <button
                       type="button"
-                      onClick={handleShareCopy}
+                      onClick={() => void handleShareCopy(shareUrl)}
                       disabled={!shareUrl}
                       title={
                         !shareUrl
-                          ? `棋譜が ${SHARE_MAX_PGN_CHARS} 文字を超えているため共有できません`
+                          ? `棋譜が ${SHARE_MAX_CHARS} 文字を超えているため共有できません`
                           : '現在の棋譜の共有リンクをクリップボードにコピー'
                       }
                       className="focus-ai min-h-9 rounded-lg border border-border px-3 text-xs text-muted transition-colors hover:border-ai hover:text-ai disabled:cursor-not-allowed disabled:opacity-40"
@@ -1155,7 +1184,7 @@ export function ReviewView({
                     </button>
                     {!shareUrl && (
                       <span className="text-[10px] text-subtle">
-                        棋譜が長すぎます（上限 {SHARE_MAX_PGN_CHARS} 文字）
+                        棋譜が長すぎます（上限 {SHARE_MAX_CHARS} 文字）
                       </span>
                     )}
                   </div>
@@ -1218,6 +1247,32 @@ export function ReviewView({
                     </p>
                   )}
                 </div>
+
+                {/* 共有リンク（将棋・チェス版と対称）。loadedKif がある場合のみ表示。
+                    SHARE_MAX_CHARS 超過はボタン無効化＋注記。将棋リンクは s~ プレフィックス付きで、
+                    受信側は decodeShareParam→loadShogi（tsshogi 動的 import 経由）で開く。 */}
+                {loadedKif && (
+                  <div className="flex flex-wrap items-center gap-2 border-t border-border pt-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleShareCopy(shogiShareUrl)}
+                      disabled={!shogiShareUrl}
+                      title={
+                        !shogiShareUrl
+                          ? `棋譜が ${SHARE_MAX_CHARS} 文字を超えているため共有できません`
+                          : '現在の棋譜の共有リンクをクリップボードにコピー'
+                      }
+                      className="focus-ai min-h-9 rounded-lg border border-border px-3 text-xs text-muted transition-colors hover:border-ai hover:text-ai disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {shareCopied ? 'コピーしました！' : '共有リンクをコピー'}
+                    </button>
+                    {!shogiShareUrl && (
+                      <span className="text-[10px] text-subtle">
+                        棋譜が長すぎます（上限 {SHARE_MAX_CHARS} 文字）
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             </details>
           )}

@@ -412,6 +412,48 @@ export function decodePgnFromUrl(encoded: string): string | null {
   }
 }
 
+/*
+ * 共有リンクのゲーム種別つきエンコード/デコード（チェス既存 + 将棋を後方互換で追加）。
+ *
+ * WHY この形式か（既に配布済みのチェス共有URLを絶対に壊さない）:
+ *   旧フォーマットは `#g=<base64url(PGN)>` で種別マーカーが無く、常にチェスとして復号していた。
+ *   ここに将棋(KIF)を同居させるため、base64url の文字集合 [A-Za-z0-9-_] に**含まれない** '~' を
+ *   区切りにした種別プレフィックスを導入する:
+ *     - チェス = **プレフィックス無しのまま**（＝旧URL・既存テスト・既存 encodePgnForUrl 出力と同一）。
+ *               将来の明示用に 'c~' も受理する。
+ *     - 将棋   = 's~' + base64url(KIF)。
+ *   '~' は RFC 3986 の unreserved で URL/フラグメントに安全、かつ base64url には決して現れないので、
+ *   「プレフィックスの有無と種別」を無損失・無曖昧に判別できる（旧チェスURLの base64 本体が偶然
+ *   's~'/'c~' で始まることは無い — base64url の 2 文字目が '~' になり得ないため）。
+ *
+ * WHY storage.ts（＝メインバンドル）に置いてよいか（1バイト不変条件）:
+ *   これは純粋な base64/文字列処理で tsshogi/やねうら王に一切依存しない。復号結果の KIF を実際に
+ *   将棋 GameModel へ載せる処理（loadShogi）は従来どおり動的 import 経由なので、チェス利用者の
+ *   メインバンドルに将棋ライブラリは漏れない。
+ */
+export function encodeShareParam(kind: GameKind, text: string): string {
+  const body = encodePgnForUrl(text);
+  return kind === 'shogi' ? `s~${body}` : body;
+}
+
+/**
+ * 共有リンクの `g=` パラメータ本体を { kind, text } に復号する。破損・無効は null。
+ * プレフィックス無し or 'c~' → チェス（旧URL互換）、's~' → 将棋。
+ */
+export function decodeShareParam(param: string): { kind: GameKind; text: string } | null {
+  let kind: GameKind = 'chess';
+  let body = param;
+  if (param.startsWith('s~')) {
+    kind = 'shogi';
+    body = param.slice(2);
+  } else if (param.startsWith('c~')) {
+    kind = 'chess';
+    body = param.slice(2);
+  }
+  const text = decodePgnFromUrl(body);
+  return text === null ? null : { kind, text };
+}
+
 // ── localStorage 操作(副作用) ─────────────────────────────────
 
 /**
