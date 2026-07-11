@@ -7,6 +7,8 @@ import {
   deserializeSession,
   encodePgnForUrl,
   decodePgnFromUrl,
+  encodeShareParam,
+  decodeShareParam,
   serializePlayedGames,
   deserializePlayedGames,
   appendPlayedGame,
@@ -217,6 +219,76 @@ describe('encodePgnForUrl / decodePgnFromUrl', () => {
     const longPgn = '[Event "Opera Game"]\n\n' + '1. e4 e5 '.repeat(30) + '*';
     const encoded = encodePgnForUrl(longPgn);
     expect(decodePgnFromUrl(encoded)).toBe(longPgn);
+  });
+});
+
+// ── encodeShareParam / decodeShareParam（種別つき共有リンク・後方互換） ──
+
+describe('encodeShareParam / decodeShareParam', () => {
+  const PGN = '[Event "Test"]\n\n1. e4 e5 *';
+  // 日本語を含む KIF（種別プレフィックス + UTF-8 base64 の両方を検証する）
+  const KIF = '手数----指手---------消費時間--\n   1 ７六歩(77)   ( 0:00/00:00:00)\n';
+
+  it('チェスは後方互換のためプレフィックス無し（＝生の encodePgnForUrl と同一出力）', () => {
+    // 既に配布済みのチェス共有URLを壊さないための最重要不変条件。
+    expect(encodeShareParam('chess', PGN)).toBe(encodePgnForUrl(PGN));
+  });
+
+  it('旧フォーマット（プレフィックス無し base64url）はチェスとして復号できる', () => {
+    const legacy = encodePgnForUrl(PGN); // 旧URLが持っていた形
+    expect(decodeShareParam(legacy)).toEqual({ kind: 'chess', text: PGN });
+  });
+
+  it('チェスのラウンドトリップ', () => {
+    expect(decodeShareParam(encodeShareParam('chess', PGN))).toEqual({ kind: 'chess', text: PGN });
+  });
+
+  it('将棋は s~ プレフィックスつきで、日本語 KIF もラウンドトリップする', () => {
+    const enc = encodeShareParam('shogi', KIF);
+    expect(enc.startsWith('s~')).toBe(true);
+    expect(decodeShareParam(enc)).toEqual({ kind: 'shogi', text: KIF });
+  });
+
+  it("明示的な 'c~' プレフィックスもチェスとして復号する", () => {
+    expect(decodeShareParam(`c~${encodePgnForUrl(PGN)}`)).toEqual({ kind: 'chess', text: PGN });
+  });
+
+  it('破損した本体は null（例外を投げない）', () => {
+    expect(decodeShareParam('s~!!!invalid!!!')).toBeNull();
+    expect(decodeShareParam('!!!invalid!!!')).toBeNull();
+  });
+
+  it('チェスとして復号したものが将棋に化けない（種別の取り違え防止）', () => {
+    // チェス出力（プレフィックス無し）は必ず kind:chess。将棋は必ず s~。
+    const chessEnc = encodeShareParam('chess', PGN);
+    const shogiEnc = encodeShareParam('shogi', KIF);
+    expect(decodeShareParam(chessEnc)?.kind).toBe('chess');
+    expect(decodeShareParam(shogiEnc)?.kind).toBe('shogi');
+  });
+
+  // ── 受信側の入力上限（Codex ゲート② F001・自己DoS防止） ──
+
+  it('maxChars を超える復号後テキストは null（受信側の上限。既定 Infinity では従来通り通す）', () => {
+    const bigPgn = 'x'.repeat(6000);
+    const enc = encodeShareParam('chess', bigPgn);
+    expect(decodeShareParam(enc, 5000)).toBeNull(); // 復号後 6000 > 5000 → 拒否
+    expect(decodeShareParam(enc)).toEqual({ kind: 'chess', text: bigPgn }); // 既定は上限なし＝後方互換
+  });
+
+  it('巨大なエンコード入力は復号前に precheck で弾く（復号コスト回避）', () => {
+    const huge = `s~${'A'.repeat(50000)}`;
+    expect(decodeShareParam(huge, 5000)).toBeNull();
+  });
+
+  it('上限内はこれまで通りラウンドトリップする（チェス/将棋とも）', () => {
+    expect(decodeShareParam(encodeShareParam('chess', PGN), 5000)).toEqual({
+      kind: 'chess',
+      text: PGN,
+    });
+    expect(decodeShareParam(encodeShareParam('shogi', KIF), 5000)).toEqual({
+      kind: 'shogi',
+      text: KIF,
+    });
   });
 });
 
