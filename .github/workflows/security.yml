@@ -130,7 +130,7 @@ jobs:
         with:
           sarif_file: trivy-fs.sarif
           category: trivy
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: trivy-artifacts

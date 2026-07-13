@@ -52,7 +52,7 @@ jobs:
         # if: always() — テストが失敗した時こそ junit.xml が必要（失敗の内訳を
         # レビューパケット側で読むため）。成功時のみアップロードでは意味が半減する。
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results
           path: artifacts/test/junit.xml
