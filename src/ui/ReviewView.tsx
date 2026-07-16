@@ -22,7 +22,7 @@ import {
   decodeShareParam,
 } from '../core/storage';
 import { Board } from './Board';
-import { withMoveLabels } from './moveLabels';
+import { withMoveLabels, enrichStoredChessContexts } from './moveLabels';
 
 /*
  * ShogiBoard は将棋タブを開いたときだけ読み込む（React.lazy で code-split）。
@@ -283,6 +283,12 @@ export function ReviewView({
         let savedCtx: Record<number, ExplanationContext> | null = null;
         if (opts?.restoreCtx) {
           savedCtx = loadContextsFromStorage(hashPgn(pgn));
+          // ゲート② codex 異モデルレビュー F001 対応(2026-07-16・accept)。
+          // ラベル機能追加より前に保存された旧キャッシュは movePlayedLabel 等を持たないが、
+          // 単手/全手解析は「既にキャッシュ済み」として再解析しないため、放置すると
+          // 復元済みの手には永久にラベルが付かない。復元直後にその場で補完する
+          // （SCHEMA_VERSION は他データと共有のため上げない。詳細は moveLabels.ts 参照）。
+          if (savedCtx) savedCtx = enrichStoredChessContexts(savedCtx);
         }
 
         // ChessGame を GameModel に薄く包む（chessGameModel）。ChessGame 本体は無改修。

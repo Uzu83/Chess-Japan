@@ -88,3 +88,53 @@ export function withMoveLabels(
 ): Promise<ExplanationContext> {
   return kind === 'shogi' ? withShogiLabels(ctx) : Promise.resolve(withChessLabels(ctx));
 }
+
+/**
+ * localStorage から復元した解析済みコンテキスト群に、欠けているラベルを補完する。
+ *
+ * WHY 必要か（ゲート② codex 異モデルレビュー F001・2026-07-16 accept）:
+ *   ラベル機能の追加より前に `saveContextsToStorage`(storage.ts) で保存された解析結果は
+ *   movePlayedLabel/bestMoveLabel/pvLabels を持たない。`ReviewView.loadPgn` は復元した
+ *   context をそのまま `setContexts` し、以降の単手解析(`if (contexts[ply]) return`)・
+ *   全手解析(`ply in prev` ガード)は「既にキャッシュ済み」として再解析しないため、
+ *   復元済みの手には**永久にラベルが付かず**、解説リクエストがラベル無しで送られてしまう
+ *   （＝今回の修正が既存ユーザーのローカルキャッシュに届かない）。
+ *
+ * WHY SCHEMA_VERSION を上げないか（裁定済み・絶対に踏まない不変条件）:
+ *   storage.ts の SCHEMA_VERSION は contexts 専用ではなく session/対局履歴(cj:games)/
+ *   レート(cj:rating)とも共有されている。バンプすると旧データが一括で null 化され、
+ *   ユーザーの Elo レートと対局履歴が消える。ラベル欠落は「復元後にその場で埋める」
+ *   （このモジュールの役割）ことで解決し、スキーマ自体は変えない。
+ *
+ * WHY chess 専用でよいか（shogi 分岐が無いことの根拠）:
+ *   解析キャッシュの永続化・復元経路(`loadPgn` の `restoreCtx`)は chess 専用。将棋
+ *   (`loadShogi`)は `setLoadedPgn(null)` で永続化 effect を確実にスキップする設計
+ *   （PLAN.md Phase 4-1 の設計判断・ReviewView.tsx の loadShogi コメント参照）ため、
+ *   将棋の保存済みコンテキストはそもそも存在せず、この関数で復元する対象がない。
+ *   よって chess 専用の同期関数(`withChessLabels` 相当)だけで十分——`withMoveLabels`
+ *   のような async/shogi 分岐を持ち込む必要がなく、`loadPgn`(同期関数)から素直に呼べて
+ *   await 越しのレース(世代ガード等)も生じない。
+ *
+ * WHY 冪等か:
+ *   `movePlayedLabel` が既に定義済みのエントリはラベル付与済み(新仕様で保存された分)と
+ *   判断してスキップする。壊れた/変換不能な手(uciToSan が null)は前回同様 undefined の
+ *   ままにし、毎回変換を試みて失敗するだけの無駄なコストにしない。
+ *
+ * 補完後の返り値はそのまま `setContexts` される想定で、その後は既存の保存 effect
+ * （`saveContextsToStorage` を呼ぶ useEffect）が新しい形(ラベル付き)で再保存するため、
+ * ストレージは次回保存時に自己修復される（この関数自身は保存処理を行わない・呼び出し側の
+ * 既存 effect に委ねる）。
+ */
+export function enrichStoredChessContexts(
+  data: Record<number, ExplanationContext>,
+): Record<number, ExplanationContext> {
+  const out: Record<number, ExplanationContext> = {};
+  for (const [key, ctx] of Object.entries(data)) {
+    // movePlayedLabel が既にあれば補完済み(新仕様で保存された分)とみなしスキップ。
+    // movePlayed も bestMove も無ければ withChessLabels 同様に素通し。
+    const needsLabel =
+      ctx.movePlayedLabel === undefined && (Boolean(ctx.movePlayed) || Boolean(ctx.bestMove));
+    out[Number(key)] = needsLabel ? withChessLabels(ctx) : ctx;
+  }
+  return out;
+}

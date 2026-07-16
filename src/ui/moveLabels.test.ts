@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { withMoveLabels } from './moveLabels';
+import { withMoveLabels, enrichStoredChessContexts } from './moveLabels';
 import type { ExplanationContext } from '../core/types';
 
 /*
@@ -93,5 +93,75 @@ describe('withMoveLabels: shogi', () => {
     const enriched = await withMoveLabels(ctx, 'shogi');
     expect(enriched).toEqual(ctx);
     expect(enriched.movePlayedLabel).toBeUndefined();
+  });
+});
+
+// ゲート② codex 異モデルレビュー F001（2026-07-16 accept）: ラベル機能追加より前に
+// localStorage(cj:ctx:<pgnHash>)に保存された旧キャッシュにはラベルが無い。ReviewView.loadPgn は
+// 復元直後に enrichStoredChessContexts を通すことで、既存ユーザーのローカルキャッシュにも
+// ラベルを行き渡らせる（SCHEMA_VERSION は他データと共有のため不変。moveLabels.ts のコメント参照）。
+describe('enrichStoredChessContexts', () => {
+  it('ラベル無しの保存済み context を SAN ラベル付きに補完する', () => {
+    const stored: Record<number, ExplanationContext> = {
+      0: {
+        fenOrSfen: CHESS_START,
+        movePlayed: 'e2e4',
+        bestMove: 'g1f3',
+        pv: ['g1f3', 'g8f6'],
+      },
+    };
+    const enriched = enrichStoredChessContexts(stored);
+    expect(enriched[0].movePlayedLabel).toBe('e4');
+    expect(enriched[0].bestMoveLabel).toBe('Nf3');
+    expect(enriched[0].pvLabels).toEqual(['Nf3', 'Nf6']);
+  });
+
+  it('既にラベルがある context は値を変えない（冪等）', () => {
+    const already: ExplanationContext = {
+      fenOrSfen: CHESS_START,
+      movePlayed: 'e2e4',
+      movePlayedLabel: 'e4',
+      bestMove: 'g1f3',
+      bestMoveLabel: 'Nf3',
+      pv: ['g1f3', 'g8f6'],
+      pvLabels: ['Nf3', 'Nf6'],
+    };
+    const enriched = enrichStoredChessContexts({ 0: already });
+    expect(enriched[0]).toEqual(already);
+  });
+
+  it('movePlayed も bestMove も無い context は素通しする', () => {
+    const empty: ExplanationContext = { fenOrSfen: CHESS_START };
+    const enriched = enrichStoredChessContexts({ 0: empty });
+    expect(enriched[0]).toEqual(empty);
+  });
+
+  it('不正 UCI（変換不能）はラベル undefined のまま壊れない', () => {
+    const broken: Record<number, ExplanationContext> = {
+      0: {
+        fenOrSfen: CHESS_START,
+        movePlayed: 'e2e5', // 非合法
+        bestMove: 'z9z9', // 不正座標
+      },
+    };
+    const enriched = enrichStoredChessContexts(broken);
+    expect(enriched[0].movePlayedLabel).toBeUndefined();
+    expect(enriched[0].bestMoveLabel).toBeUndefined();
+  });
+
+  it('複数エントリを ply キーを保ったまま補完する', () => {
+    const stored: Record<number, ExplanationContext> = {
+      0: { fenOrSfen: CHESS_START, movePlayed: 'e2e4', bestMove: 'g1f3' },
+      2: {
+        fenOrSfen: CHESS_START,
+        movePlayed: 'e2e4',
+        movePlayedLabel: 'e4', // 既に補完済み(新仕様で保存された分)
+        bestMove: 'g1f3',
+      },
+    };
+    const enriched = enrichStoredChessContexts(stored);
+    expect(Object.keys(enriched).sort()).toEqual(['0', '2']);
+    expect(enriched[0].movePlayedLabel).toBe('e4');
+    expect(enriched[2]).toEqual(stored[2]); // 冪等
   });
 });
