@@ -40,6 +40,20 @@
 - findings 1 件: F001 medium「buildPrompt のプロンプト契約に自動テストがない」→ **accept**（上記 5. と 7. に反映。_shared 切り出し + vitest 契約テスト）。
 - リスク評価: medium。信頼境界・キャッシュキー・互換性の方針には不変条件を破る問題なし（codex 評価と当方判断一致）。
 
+## ゲート②記録（2026-07-16・codex CLI 主審 + Claude reviewer 副審の二重レビュー）
+
+- **サイクル1（codex）**: F001 medium「旧バージョンが localStorage に保存した解析キャッシュ（cj:ctx:*）はラベル無しのまま復元され、再解析ガードにより永久にラベルが付かない」→ **チェス側は accept**・「将棋で誤命名が再発」の主張部分は **reject**（将棋は解析キャッシュを永続化しない設計＝復元経路が存在しない。事実誤認）。
+  - 修正: `enrichStoredChessContexts`（moveLabels.ts・純関数・冪等）で復元直後に補完。**共有 SCHEMA_VERSION はバンプしない**（session/対局履歴/レートと共有されており、バンプすると Elo と履歴が消える破壊的副作用があるため。裁定で明示的に却下した選択肢）。
+- **Claude 副審**: blocker/major 0・nit 2（pv 40要素 vs pvLabels 6要素の非対称は表示との整合で設計意図どおり / system への内部フィールド名露出は固定リテラルで安全）→ 対応不要と裁定。
+- **サイクル2（codex）**: findings 空・risk low。「F001 は解消。保存 effect で自己修復される。新たな問題なし」→ **合意成立**。
+- 検証: 309 tests 緑・verify/deno check 緑・1バイト不変条件（バンドル実測 0 件）維持。
+
+## 残作業（PR マージ後）
+
+1. Edge Function 再デプロイ（Supabase MCP・v10 → v11 相当。index.ts + _shared/prompt.ts + _shared/validate.ts）
+2. 本番 E2E: 将棋の好手/悪手ケースで解説文の指し手名が movePlayedLabel と一致すること（▲２二角成 型の誤命名が消える）・チェス SAN 一致・キャッシュヒット動作
+3. 完了後このファイルを削除（docs/progress の一時ファイル規律）
+
 ## 不変条件の維持（CLAUDE.md 4 項目に対して）
 
 - **コスト防衛**: レート制限/日次クォータ/Turnstile/キャッシュ本体・16KB body 上限に触れない。追加フィールドは個別長上限で有界（最悪 +40×42 文字 ≈ 1.7KB、16KB 内）。
