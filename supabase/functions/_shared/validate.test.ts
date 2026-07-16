@@ -198,6 +198,186 @@ describe('validateExplainBody: 空文字/空白の扱い', () => {
   });
 });
 
+// 2026-07-16・explain-label-data-plan.md: movePlayedLabel/bestMoveLabel/pvLabels は
+// 旧仕様(表示専用・drop)から「検証して LLM の DATA にも渡す」仕様へ変わった。
+describe('validateExplainBody: ラベル3フィールド（movePlayedLabel/bestMoveLabel/pvLabels）', () => {
+  it('将棋の日本語ラベル・チェスの SAN ラベルを受理する', () => {
+    const r = validateExplainBody({
+      ...validExplain,
+      context: {
+        ...validExplain.context,
+        movePlayedLabel: 'e4',
+        bestMove: 'g1f3',
+        bestMoveLabel: 'Nf3',
+        pv: ['g1f3', 'g8f6'],
+        pvLabels: ['Nf3', 'Nf6'],
+      },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.context.movePlayedLabel).toBe('e4');
+      expect(r.value.context.bestMoveLabel).toBe('Nf3');
+      expect(r.value.context.pvLabels).toEqual(['Nf3', 'Nf6']);
+    }
+    const shogi = validateExplainBody({
+      mode: 'explain',
+      game: 'shogi',
+      context: {
+        fenOrSfen: 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1',
+        movePlayed: '7g7f',
+        movePlayedLabel: '☗７六歩',
+        bestMove: '8h2b+',
+        bestMoveLabel: '☗２二角成', // 実バグの正解（▲８八角成ではない）
+        pv: ['8h2b+'],
+        pvLabels: ['☗２二角成'],
+      },
+    });
+    expect(shogi.ok).toBe(true);
+    if (shogi.ok) expect(shogi.value.context.bestMoveLabel).toBe('☗２二角成');
+  });
+
+  it('制御文字を除去し前後空白を trim する', () => {
+    const r = validateExplainBody({
+      ...validExplain,
+      context: { ...validExplain.context, movePlayedLabel: ' ☗７六歩\n\t ' },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.context.movePlayedLabel).toBe('☗７六歩');
+  });
+
+  it('41文字は拒否する（labelMax=40 の上限超過）', () => {
+    expect(
+      validateExplainBody({
+        ...validExplain,
+        context: { ...validExplain.context, movePlayedLabel: 'a'.repeat(41) },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateExplainBody({
+        ...validExplain,
+        context: { ...validExplain.context, bestMoveLabel: 'a'.repeat(41) },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('40文字は受理する（境界値）', () => {
+    const r = validateExplainBody({
+      ...validExplain,
+      context: { ...validExplain.context, movePlayedLabel: 'a'.repeat(40) },
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('非文字列/非配列型は全体拒否する', () => {
+    expect(
+      validateExplainBody({
+        ...validExplain,
+        context: { ...validExplain.context, movePlayedLabel: 123 },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateExplainBody({
+        ...validExplain,
+        context: { ...validExplain.context, bestMoveLabel: { a: 1 } },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateExplainBody({
+        ...validExplain,
+        context: { ...validExplain.context, pvLabels: 'not-an-array' },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('空文字（trim/制御文字除去後に0文字）は拒否する（movePlayed の REG-01 思想と統一）', () => {
+    expect(
+      validateExplainBody({
+        ...validExplain,
+        context: { ...validExplain.context, movePlayedLabel: '' },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateExplainBody({
+        ...validExplain,
+        context: { ...validExplain.context, movePlayedLabel: '   \n\t  ' },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('pvLabels は41要素目以降をクリップする（pv と同じ規律。拒否ではない）', () => {
+    const pvLabels = Array.from({ length: 45 }, (_, i) => `label${i}`);
+    const r = validateExplainBody({
+      ...validExplain,
+      context: { ...validExplain.context, pvLabels },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.context.pvLabels!.length).toBe(40);
+  });
+
+  it('pvLabels が空配列なら undefined になる（F001: フォールバック経路を殺さない規律をサーバ側にも適用）', () => {
+    const r = validateExplainBody({
+      ...validExplain,
+      context: { ...validExplain.context, pvLabels: [] },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.context.pvLabels).toBeUndefined();
+  });
+
+  it('未指定なら undefined（後方互換: 旧クライアントはラベルを送らない）', () => {
+    const r = validateExplainBody(validExplain);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.context.movePlayedLabel).toBeUndefined();
+      expect(r.value.context.bestMoveLabel).toBeUndefined();
+      expect(r.value.context.pvLabels).toBeUndefined();
+    }
+  });
+});
+
+describe('cacheKeyInput: ラベル3フィールドのキー反映（キャッシュ汚染防止）', () => {
+  it('ラベル未指定は固定形状で null が入る', () => {
+    const r = validateExplainBody(validExplain);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const key = cacheKeyInput(r.value);
+      const context = key.context as Record<string, unknown>;
+      expect(context.movePlayedLabel).toBeNull();
+      expect(context.bestMoveLabel).toBeNull();
+      expect(context.pvLabels).toBeNull();
+    }
+  });
+
+  it('ラベル差でキーの JSON が変わる（嘘ラベルによるキャッシュ汚染の防止）', () => {
+    const a = validateExplainBody({
+      ...validExplain,
+      context: { ...validExplain.context, movePlayedLabel: 'e4' },
+    });
+    const b = validateExplainBody({
+      ...validExplain,
+      context: { ...validExplain.context, movePlayedLabel: 'e5(嘘ラベル)' },
+    });
+    expect(a.ok && b.ok).toBe(true);
+    if (a.ok && b.ok)
+      expect(JSON.stringify(cacheKeyInput(a.value))).not.toBe(
+        JSON.stringify(cacheKeyInput(b.value)),
+      );
+  });
+
+  it('同値ラベルは同一キー', () => {
+    const a = validateExplainBody({
+      ...validExplain,
+      context: { ...validExplain.context, movePlayedLabel: 'e4', bestMoveLabel: 'Nf3' },
+    });
+    const b = validateExplainBody({
+      ...validExplain,
+      context: { ...validExplain.context, movePlayedLabel: 'e4', bestMoveLabel: 'Nf3' },
+    });
+    expect(a.ok && b.ok).toBe(true);
+    if (a.ok && b.ok)
+      expect(JSON.stringify(cacheKeyInput(a.value))).toBe(JSON.stringify(cacheKeyInput(b.value)));
+  });
+});
+
 describe('cacheKeyInput', () => {
   it('explain の主要事実を決定的に並べる（context全体+語彙、level 既定 beginner）', () => {
     const r = validateExplainBody(validExplain);
@@ -209,10 +389,13 @@ describe('cacheKeyInput', () => {
         context: {
           fenOrSfen: validExplain.context.fenOrSfen,
           movePlayed: 'e2e4',
+          movePlayedLabel: null,
           evalBefore: null,
           evalAfter: null,
           bestMove: null,
+          bestMoveLabel: null,
           pv: null,
+          pvLabels: null,
           quality: null,
         },
         known: [],
