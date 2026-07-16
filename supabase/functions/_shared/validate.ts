@@ -38,10 +38,25 @@ export type Level = 'beginner' | 'intermediate' | 'advanced';
 export interface ExplainContext {
   fenOrSfen: string;
   movePlayed?: string;
+  /*
+   * ── ラベル3フィールド（2026-07-16・explain-label-data-plan.md）──
+   * 旧仕様: これらは表示専用で、ここ(validate.ts)は allowlist で drop していた
+   *   （src/core/types.ts の ExplanationContext には既に存在したが LLM には渡らなかった）。
+   * 新仕様: 本番 E2E で確認した実バグ（将棋の指し手誤命名。正: ▲２二角成 → 誤: ▲８八角成）の根治として、
+   *   「エンジン由来の正確な手表記を DATA に同梱し、LLM には座標からの変換をさせず引用させる」方針に変更。
+   *   ここで検証して初めて信頼境界を通過し、buildPrompt(prompt.ts) の DATA(JSON.stringify(context)) に
+   *   自動的に載る。cacheKeyInput/normalizeContext にも必ず含めること（下記コメント参照）。
+   */
+  /** 指した手の表示ラベル（将棋=日本語 "☗２二角成" / チェス=SAN "e4"）。 */
+  movePlayedLabel?: string;
   evalBefore?: number;
   evalAfter?: number;
   bestMove?: string;
+  /** 最善手の表示ラベル（将棋=日本語 / チェス=SAN）。 */
+  bestMoveLabel?: string;
   pv?: string[];
+  /** 読み筋(PV)の表示ラベル列（将棋=日本語 / チェス=SAN）。 */
+  pvLabels?: string[];
   quality?: MoveQuality;
 }
 
@@ -66,6 +81,12 @@ const LIMITS = {
   fenMax: 200,
   // UCI 手は最大 "e7e8q"=5 文字。将棋の USI も "P*5e"/"7g7f+" 等で十分 8 に収まる。余裕を見て 10。
   moveMax: 10,
+  // 手ラベル(movePlayedLabel/bestMoveLabel/pvLabels の各要素)の長さ上限。
+  // 根拠: 将棋の日本語表記は「☗２二角成」等で駒種+成/打を含んでも ≤10 文字。チェスの SAN は
+  //   アンダープロモーション+チェック+メイト記号を含んでも "bxa8=Q#" 等で ≤7 文字。
+  //   profileItemMax(用語1語の上限)と同値の 40 にして、想定最大の3〜4倍の余裕を見ておく
+  //   （エンジン由来の値なので基本この範囲に収まるが、将来の表記変更で数文字伸びても壊れないように）。
+  labelMax: 40,
   // 評価値(cp)の妥当域。詰みは別途 mate 換算で ±100000 付近まで来るため広めに。
   // これを超える値は分類ロジックの想定外＝壊れた/悪意ある入力。
   evalAbsMax: 1_000_000,
@@ -184,14 +205,48 @@ export function validateExplainBody(input: unknown): ValidationResult {
   const pv = sanitizeStringArray(c.pv, LIMITS.pvMaxItems, LIMITS.moveMax);
   if (pv === null) return { ok: false, error: 'invalid pv' };
 
+  // ── ラベル3フィールドの検証（2026-07-16・explain-label-data-plan.md） ──
+  // movePlayedLabel/bestMoveLabel は「☗２二角成」のような自由記号混じりの短い表示文字列なので、
+  // moveMax(座標表記用)ではなく labelMax を使う。かつ制御文字を除去(cleanText)してから長さを見る
+  // ——これらは最終的に DATA(JSON.stringify(context))経由で LLM に渡るため、question/history と同じ
+  // “自由文”の扱いにする(改行注入で偽の構造を作られないようにする＝多観点レビュー PI-001/PI-002 と同思想)。
+  // 空文字は拒否する（REG-01: movePlayed/bestMove の「空文字は矛盾データなので拒否」という既存の思想を
+  //   ラベルにも合わせる。undefined 扱いへ黙って落とすと「ラベル欠落」と「空文字送信」の区別が消え、
+  //   クライアント側の実装ミスをサーバが静かに握ってしまう）。
+  let movePlayedLabel: string | undefined;
+  if (c.movePlayedLabel !== undefined) {
+    if (!isStr(c.movePlayedLabel)) return { ok: false, error: 'invalid movePlayedLabel' };
+    const cleaned = cleanText(c.movePlayedLabel);
+    if (cleaned.length === 0 || cleaned.length > LIMITS.labelMax)
+      return { ok: false, error: 'invalid movePlayedLabel' };
+    movePlayedLabel = cleaned;
+  }
+  let bestMoveLabel: string | undefined;
+  if (c.bestMoveLabel !== undefined) {
+    if (!isStr(c.bestMoveLabel)) return { ok: false, error: 'invalid bestMoveLabel' };
+    const cleaned = cleanText(c.bestMoveLabel);
+    if (cleaned.length === 0 || cleaned.length > LIMITS.labelMax)
+      return { ok: false, error: 'invalid bestMoveLabel' };
+    bestMoveLabel = cleaned;
+  }
+  // pvLabels は既存の pv と同じ配列サニタイズ経路(sanitizeStringArray)を使う。
+  // 型不正(非配列/非文字列要素混入)は pv と同様に全体拒否、上限超過は黙ってクリップする。
+  const pvLabels = sanitizeStringArray(c.pvLabels, LIMITS.pvMaxItems, LIMITS.labelMax);
+  if (pvLabels === null) return { ok: false, error: 'invalid pvLabels' };
+
   const context: ExplainContext = {
     fenOrSfen: c.fenOrSfen,
     movePlayed: c.movePlayed as string | undefined,
+    movePlayedLabel,
     bestMove: c.bestMove as string | undefined,
+    bestMoveLabel,
     evalBefore: c.evalBefore as number | undefined,
     evalAfter: c.evalAfter as number | undefined,
     quality: c.quality as MoveQuality | undefined,
     pv: pv.length ? pv : undefined,
+    // 空配列は undefined に落とす(F001 由来の規律。src/ui/moveLabels.ts の pvLabels 付与側と対称)。
+    // 定義済み空配列だとサーバ/フロント双方の「ラベル欠落は undefined」という契約が崩れる。
+    pvLabels: pvLabels.length ? pvLabels : undefined,
   };
 
   // question は followup のときだけ意味を持つ。長さ上限でトークン膨張攻撃を抑止。
@@ -282,15 +337,29 @@ export function cacheKeyInput(body: ExplainBody): Record<string, unknown> {
  * なぜ: JSON 化したキーが「キー欠落 vs undefined」や「フィールド順の差」で別物にならないようにするため。
  *   ここに ExplainContext の“全”フィールドを並べる（pv 含む）。フィールドを増やしたら必ずここにも足すこと
  *   （足し忘れ＝プロンプトに効くのにキーに効かない＝誤再利用バグの再発）。
+ *
+ * movePlayedLabel/bestMoveLabel/pvLabels を足す理由（2026-07-16・explain-label-data-plan.md）:
+ *   これらは buildPrompt の DATA(JSON.stringify(context))に載り、LLM の出力（指し手の呼び方）に
+ *   直接効く要素になった。「プロンプトに効く要素はすべてキーに含める」不変条件（このファイル冒頭の
+ *   cacheKeyInput コメント参照）に従い、キーへの反映を漏らすと次の攻撃が成立してしまう:
+ *     攻撃者が本物の局面(fenOrSfen)に対して**嘘のラベル**(例: 全く違う手の表記)を付けてリクエストし、
+ *     そのキャッシュを温める → ラベルをキーに含めていないと、後続の別ユーザーの正当なリクエスト
+ *     （同一局面・ラベル無しまたは別ラベル）が誤ってこの「嘘のラベルで書かれた解説」のキャッシュに
+ *     ヒットしてしまう＝本物のユーザーへ毒入り（誤った指し手名の）解説が配られるキャッシュ汚染。
+ *   キーに含めれば、ラベルが違えば別キーになるので、嘘ラベルの影響は送信者自身のリクエストに閉じる
+ *   （本人が自分に嘘の解説を返す＝自己 DoS 相当で、他者への被害はない）。
  */
 function normalizeContext(c: ExplainContext): Record<string, unknown> {
   return {
     fenOrSfen: c.fenOrSfen,
     movePlayed: c.movePlayed ?? null,
+    movePlayedLabel: c.movePlayedLabel ?? null,
     evalBefore: c.evalBefore ?? null,
     evalAfter: c.evalAfter ?? null,
     bestMove: c.bestMove ?? null,
+    bestMoveLabel: c.bestMoveLabel ?? null,
     pv: c.pv ?? null,
+    pvLabels: c.pvLabels ?? null,
     quality: c.quality ?? null,
   };
 }
