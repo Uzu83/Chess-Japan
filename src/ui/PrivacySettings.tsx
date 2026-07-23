@@ -96,18 +96,24 @@ export function PrivacySettings() {
               {publicUrl}
             </a>
           </p>
-          <button
-            type="button"
-            className="focus-ai w-fit min-h-11 rounded-lg border border-border px-3 text-xs text-muted hover:border-ai hover:text-on-surface"
-            onClick={() => {
-              void navigator.clipboard.writeText(publicUrl).then(
-                () => setMsg('公開 URL をコピーしました'),
-                () => setMsg('コピーに失敗しました'),
-              );
-            }}
-          >
-            URL をコピー
-          </button>
+          {'clipboard' in navigator && typeof navigator.clipboard?.writeText === 'function' ? (
+            <button
+              type="button"
+              className="focus-ai w-fit min-h-11 rounded-lg border border-border px-3 text-xs text-muted hover:border-ai hover:text-on-surface"
+              onClick={() => {
+                try {
+                  void navigator.clipboard.writeText(publicUrl).then(
+                    () => setMsg('公開 URL をコピーしました'),
+                    () => setMsg('コピーに失敗しました'),
+                  );
+                } catch {
+                  setMsg('コピーに失敗しました');
+                }
+              }}
+            >
+              URL をコピー
+            </button>
+          ) : null}
         </div>
       )}
       <button
