@@ -3,34 +3,35 @@
  *
  * 表示規則:
  *   disabled  → 何も描画しない(App の見た目が従来と完全同一 = 必須要件)
- *   anonymous → 「ログイン」ボタン(Google OAuth へ)
- *   loading   → 無効化した同ボタン(点滅などの演出は不要 — 一瞬なので静かに)
- *   signedIn  → 表示名 + クラウドレートのコンパクトなメニュー(ログアウト)
+ *   anonymous → 「ログイン」ボタン → AuthDialog（Google/Apple/メール）
+ *   loading   → 無効化した同ボタン
+ *   signedIn  → 表示名 + 初期設定レートのコンパクトなメニュー
  *
  * 【2C-1 の意図的な制約 — 未来の担当者へ】
- * クラウドレートの表示はこのメニュー内だけ。PlayView の表示レートはローカルのまま
- * 一切触っていない。WHY: 2C-1 ではレート戦の結果はまだローカルにしか反映されない
- * (クラウド反映の配線は 2C-2)。PlayView の表示をクラウド値に切り替えると
- * 「表示はクラウド・更新はローカル」の嘘 UX になるため、あえて分離した。
- * 2C-2 でクラウド同期が入った時に初めて PlayView をクラウド値に切り替えること。
+ * クラウドレートの表示はこのメニュー内だけ。PlayView の表示レートはローカルのまま。
+ * クラウドへの対局結果の自動反映は未対応（初期設定値のまま）。
  */
 import { useState } from 'react';
 import { useAuth } from '../auth/authState';
+import { loadRating } from '../core/storage';
+import { AuthDialog } from './AuthDialog';
 
-export function AuthButton() {
-  const { status, profile, signInWithGoogle, signOut, error } = useAuth();
+export function AuthButton({
+  onOpenStrength,
+}: {
+  /** プレイ分析画面を開く（任意。未指定ならメニュー項目を出さない）。 */
+  onOpenStrength?: () => void;
+} = {}) {
+  const { status, profile, signOut, error } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   if (status === 'disabled') return null;
 
   if (status === 'anonymous' || status === 'loading') {
     return (
       <div className="flex items-center gap-2">
-        {/* auth 操作の失敗(プロバイダ未設定・ネットワーク等)は静かにテキストで示す。
-            title に全文(視覚的には省略されても hover/SR で読める)。
-            エラー色は他の失敗表示(解析エラー等)と同じ q-miss トークンに統一(2026-07-11 UI 監査。
-            ダークモードは変数側で切り替わる)。 */}
-        {error && (
+        {error && !dialogOpen && (
           <span className="max-w-32 truncate text-xs text-[var(--q-miss-fg)]" title={error}>
             ログイン失敗
           </span>
@@ -38,17 +39,18 @@ export function AuthButton() {
         <button
           type="button"
           disabled={status === 'loading'}
-          onClick={() => void signInWithGoogle()}
+          onClick={() => setDialogOpen(true)}
           className="focus-ai min-h-11 rounded-lg border border-border px-3 text-sm font-medium text-muted transition-colors hover:border-ai hover:text-on-surface disabled:opacity-50"
         >
           {status === 'loading' ? '確認中…' : 'ログイン'}
         </button>
+        <AuthDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
       </div>
     );
   }
 
-  // signedIn
   const name = profile?.display_name ?? 'プレイヤー';
+  const localRating = loadRating();
   return (
     <div className="relative">
       <button
@@ -58,17 +60,14 @@ export function AuthButton() {
         onClick={() => setMenuOpen((v) => !v)}
         className="focus-ai flex min-h-11 items-center gap-1.5 rounded-lg border border-border px-3 text-sm text-on-surface transition-colors hover:border-ai"
       >
-        {/* 名前は長くても崩れないよう truncate(サーバー側でも40字上限) */}
         <span className="max-w-28 truncate font-medium">{name}</span>
         {profile && (
-          <span className="text-xs text-muted" title="クラウドに保存された内部レート">
+          <span className="text-xs text-muted" title="クラウドに保存された初期設定レート">
             {profile.rating}
           </span>
         )}
       </button>
 
-      {/* 外クリックで閉じる透明バックドロップ(監査ワークフロー指摘)。
-          メニューより下(z-30 < z-40)に敷き、画面のどこを触っても閉じる。 */}
       {menuOpen && (
         <button
           type="button"
@@ -87,15 +86,34 @@ export function AuthButton() {
             <p className="truncate font-medium text-on-surface">{name}</p>
             {profile && (
               <p className="mt-0.5">
-                クラウドレート: <span className="font-semibold text-ai">{profile.rating}</span>
+                初期設定レート: <span className="font-semibold text-ai">{profile.rating}</span>
                 <span className="ml-1">({profile.games}局)</span>
               </p>
             )}
-            {/* 2C-2 までの正直な注記: 対局結果はまだ端末レートにのみ反映される */}
+            {localRating && (
+              <p className="mt-0.5">
+                対局で変動:{' '}
+                <span className="font-semibold text-on-surface">{localRating.rating}</span>
+                <span className="ml-1">({localRating.games}局)</span>
+              </p>
+            )}
             <p className="mt-1 text-[11px] leading-relaxed text-subtle">
-              対局結果の自動反映(クラウド同期)は次のアップデートで対応予定
+              クラウドへの対局結果の自動反映は未対応（初期設定値のまま）
             </p>
           </div>
+          {onOpenStrength && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                onOpenStrength();
+              }}
+              className="focus-ai min-h-11 rounded-lg border border-border px-3 text-left text-sm text-muted transition-colors hover:border-ai hover:text-on-surface"
+            >
+              プレイ分析
+            </button>
+          )}
           <button
             type="button"
             role="menuitem"

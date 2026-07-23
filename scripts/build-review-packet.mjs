@@ -133,6 +133,22 @@ if (adjRaw) {
   missing.push('レビュー裁定 (artifacts/review/review-adjudication.json)');
 }
 
+// --- 6. Tier 2 品質ゲート状態（2連続クリーン） ---------------------------------
+let gateState = null;
+const gateRaw = readIf('artifacts/review/gate-state.json');
+const tierRaw = readIf('artifacts/review/tier.json');
+if (gateRaw) gateState = JSON.parse(gateRaw);
+const tierInfo = tierRaw ? JSON.parse(tierRaw) : null;
+if (tierInfo?.tier === 2) {
+  if (!gateRaw) {
+    missing.push('Tier2 ゲート状態 (artifacts/review/gate-state.json)');
+  } else if (gateState.verdict !== 'passed') {
+    blockers.push(
+      `Tier2 品質ゲート未合格 (verdict: ${gateState.verdict}, consecutive_clear: ${gateState.consecutive_clear_cycles ?? 0})`,
+    );
+  }
+}
+
 // --- 判定（fail-closed: 欠損もブロック） ------------------------------------------
 const blocked = blockers.length > 0 || missing.length > 0;
 const gate = {
@@ -148,6 +164,10 @@ const gate = {
   sbom_present: sbomOk,
   adjudication_counts: adjudication?._counts ?? null,
   adjudication_risk_level: adjudication?.risk_level ?? null,
+  tier: tierInfo?.tier ?? null,
+  gate_verdict: gateState?.verdict ?? null,
+  consecutive_clear_cycles: gateState?.consecutive_clear_cycles ?? null,
+  total_fouls: gateState?.total_fouls ?? null,
 };
 writeFileSync(`${OUT_DIR}/risk-gate.json`, JSON.stringify(gate, null, 2) + '\n');
 
@@ -181,6 +201,12 @@ ${fmt(adjudication?.summary)}
 ## Codex レビュー裁定
 - リスクレベル: ${fmt(adjudication?.risk_level)}
 - accept: ${fmt(adjudication?._counts?.accept)} / reject: ${fmt(adjudication?._counts?.reject)} / defer: ${fmt(adjudication?._counts?.defer)}
+
+## 品質ゲート（Tier 2）
+- Tier: ${fmt(tierInfo?.tier)}
+- ゲート判定: ${fmt(gateState?.verdict)}
+- 連続クリーンサイクル: ${fmt(gateState?.consecutive_clear_cycles)} / 2 必要
+- ファール累計: ${fmt(gateState?.total_fouls)}
 
 ## SBOM: ${sbomOk ? '生成済み (artifacts/sbom/repo.cdx.json)' : '未生成（ブロック）'}
 

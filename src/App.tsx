@@ -6,12 +6,23 @@ import { AuthProvider } from './auth/AuthContext';
 import { useAuth } from './auth/authState';
 import { AuthButton } from './ui/AuthButton';
 import { OnboardingRatingDialog } from './ui/OnboardingRatingDialog';
+import { StrengthProfileView } from './ui/StrengthProfileView';
+import { PublicStrengthView } from './ui/PublicStrengthView';
+import { PvPView } from './ui/PvPView';
+import { FeedbackDialog } from './ui/FeedbackDialog';
+import { SyncToastHost } from './ui/SyncToast';
+import { isAuthConfigured } from './auth/supabaseClient';
+import {
+  getFeedbackFormUrl,
+  isFeedbackAvailable,
+  isFeedbackBackendConfigured,
+} from './feedback/client';
 
-const FEEDBACK_URL = import.meta.env.VITE_FEEDBACK_URL as string | undefined;
 const KOFI_URL = import.meta.env.VITE_KOFI_URL as string | undefined;
+const pvpEnabled = import.meta.env.VITE_PVP_ENABLED === '1' && isAuthConfigured();
 
-/** アプリのモード。対局(AI戦) / レビュー(棋譜振り返り)。 */
-type Mode = 'play' | 'review';
+/** アプリのモード。対局(AI戦) / レビュー / プレイ分析 / 対人戦。 */
+type Mode = 'play' | 'review' | 'strength' | 'pvp';
 
 /*
  * 初回サインイン時のオンボーディング(初期レート設定)ゲート。
@@ -51,6 +62,11 @@ function OnboardingGate() {
 function App() {
   const [isolated, setIsolated] = useState<boolean | null>(null);
   const [mode, setMode] = useState<Mode>('play');
+  const [publicStrengthHandle, setPublicStrengthHandle] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const h = new URLSearchParams(window.location.search).get('strength')?.trim().toLowerCase();
+    return h && h.length >= 3 ? h : null;
+  });
 
   // レビューへ渡す棋譜（kind + 本文）と、振り返りのたびに ReviewView を再マウントするための key。
   // WHY kind も持つか（Codex 修正 #2）: 対局は chess=PGN / shogi=KIF の 2 種を振り返りへ渡すため、
@@ -61,6 +77,10 @@ function App() {
   const [reviewKey, setReviewKey] = useState(0);
   // ReviewView を一度でもマウントしたか(遅延マウント + 以降 hidden 保持)。
   const [reviewMounted, setReviewMounted] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const feedbackAvailable = isFeedbackAvailable();
+  const feedbackInApp = isFeedbackBackendConfigured();
+  const feedbackFormUrl = getFeedbackFormUrl();
 
   useEffect(() => {
     setIsolated(typeof window !== 'undefined' ? window.crossOriginIsolated : null);
@@ -90,6 +110,21 @@ function App() {
     if (m === 'review') setReviewMounted(true);
     setMode(m);
   };
+
+  const closePublicStrength = () => {
+    setPublicStrengthHandle(null);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('strength');
+      window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+    }
+  };
+
+  const navItems = [
+    { m: 'play' as const, label: '対局' },
+    { m: 'review' as const, label: 'レビュー' },
+    ...(pvpEnabled ? [{ m: 'pvp' as const, label: '対人' }] : []),
+  ] satisfies { m: Mode; label: string }[];
 
   return (
     // AuthProvider は最外殻。auth 無効(disabled)時は状態を一切持たず children を
@@ -132,19 +167,13 @@ function App() {
                 aria-label="モード切替"
                 className="flex rounded-xl border border-border bg-surface p-0.5 shadow-card"
               >
-                {(
-                  [
-                    { m: 'play' as const, label: '対局' },
-                    { m: 'review' as const, label: 'レビュー' },
-                  ] satisfies { m: Mode; label: string }[]
-                ).map(({ m, label }) => (
+                {navItems.map(({ m, label }) => (
                   <button
                     key={m}
                     type="button"
                     aria-pressed={mode === m}
                     onClick={() => switchMode(m)}
                     className={[
-                      // whitespace-nowrap: モバイル幅でタブ文字(「レビュー」等)が縦に折り返すのを防ぐ
                       'focus-ai min-h-11 whitespace-nowrap rounded-lg px-3 text-sm font-medium transition-colors',
                       mode === m
                         ? 'bg-ai text-white shadow-btn dark:bg-ai-dim'
@@ -156,16 +185,27 @@ function App() {
                 ))}
               </div>
 
-              {FEEDBACK_URL && (
-                <a
-                  className="focus-ai rounded px-2 py-1 text-sm text-muted transition-colors hover:text-on-surface"
-                  href={FEEDBACK_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  フィードバック
-                </a>
-              )}
+              {feedbackAvailable &&
+                (feedbackInApp ? (
+                  <button
+                    type="button"
+                    className="focus-ai rounded px-2 py-1 text-sm text-muted transition-colors hover:text-on-surface"
+                    onClick={() => setFeedbackOpen(true)}
+                  >
+                    フィードバック
+                  </button>
+                ) : (
+                  feedbackFormUrl && (
+                    <a
+                      className="focus-ai rounded px-2 py-1 text-sm text-muted transition-colors hover:text-on-surface"
+                      href={feedbackFormUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      フィードバック
+                    </a>
+                  )
+                ))}
               {KOFI_URL && (
                 /* 差し色(藍)のみ。rose は多色使いになるため除外。
                  Ko-fi 本家オレンジを使わない理由: 藍と競合し世界観を壊す。 */
@@ -179,30 +219,37 @@ function App() {
                 </a>
               )}
 
-              {/* ログイン/アカウント(Phase 2C-1)。VITE_AUTH_ENABLED != '1' なら
-                何も描画されない = 従来のヘッダーと完全同一。 */}
-              <AuthButton />
+              {/* ログイン/アカウント。VITE_AUTH_ENABLED != '1' なら非表示。 */}
+              <AuthButton onOpenStrength={() => switchMode('strength')} />
             </nav>
           </div>
         </header>
 
         <main className="flex-1">
-          {/* PlayView は常時マウント(対局中の状態をタブ切替で失わない)。 */}
-          <div className={mode === 'play' ? '' : 'hidden'}>
-            <PlayView onReview={handleReview} playFrom={playFrom} />
-          </div>
+          {publicStrengthHandle ? (
+            <PublicStrengthView handle={publicStrengthHandle} onBack={closePublicStrength} />
+          ) : (
+            <>
+              {/* PlayView は常時マウント(対局中の状態をタブ切替で失わない)。 */}
+              <div className={mode === 'play' ? '' : 'hidden'}>
+                <PlayView onReview={handleReview} playFrom={playFrom} />
+              </div>
 
-          {/* ReviewView は初回レビューまで遅延マウント。以降 hidden で状態保持。
-            reviewKey を変えると再マウントされ initialRecord を最優先で読み込む(chess=PGN/shogi=KIF)。 */}
-          {reviewMounted && (
-            <div className={mode === 'review' ? '' : 'hidden'}>
-              <ReviewView
-                key={reviewKey}
-                initialRecord={reviewRecord}
-                active={mode === 'review'}
-                onPlayFrom={handlePlayFrom}
-              />
-            </div>
+              {reviewMounted && (
+                <div className={mode === 'review' ? '' : 'hidden'}>
+                  <ReviewView
+                    key={reviewKey}
+                    initialRecord={reviewRecord}
+                    active={mode === 'review'}
+                    onPlayFrom={handlePlayFrom}
+                  />
+                </div>
+              )}
+
+              {mode === 'strength' && <StrengthProfileView onBack={() => switchMode('play')} />}
+
+              {mode === 'pvp' && pvpEnabled && <PvPView onBack={() => switchMode('play')} />}
+            </>
           )}
         </main>
 
@@ -255,6 +302,8 @@ function App() {
 
       {/* 初回サインイン時の初期レート設定(fixed オーバーレイなので配置は末尾でよい) */}
       <OnboardingGate />
+      <FeedbackDialog open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
+      <SyncToastHost />
     </AuthProvider>
   );
 }
