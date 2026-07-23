@@ -27,21 +27,30 @@ alter table public.pvp_rooms
     ),
   add column if not exists authority_version integer not null default 0;
 
--- WHY 既存 waiting/active を一括 abort するか（Codex data cycle-13 F001）:
---   旧 pvp_submit_move / pvp_finalize は本 migration で DROP し、新 pvp_apply_move は
---   authority_version<1 を拒否する。0 のまま残すと進行中対局は着手も終局もできず
---   固着する。再キュー時 abort だけだと「途中放棄」と同じなので、適用時点で明示
---   abort し、新規マッチは authority_version=1 から始める。
---   旧 finished（finish_reason NULL）は verified record 対象外のまま（意図どおり）。
+-- WHY 旧部屋を cutover するか（Codex data cycle-13 F001 / cycle-15 F001 の調停）:
+--   旧 RPC を DROP すると authority_version=0 のままでは着手・終局不能で固着する。
+--   一方、active を無条件 abort すると進行中対局の終局記録経路まで消える。
+--   よって waiting は abort、active はサーバー権威の abandon 引き分けで finished にし、
+--   双方が pvp_record_game で本人履歴を残せるようにする（新規は version=1）。
 update public.pvp_rooms
    set status = 'aborted',
        finish_reason = coalesce(finish_reason, 'abandon'),
        updated_at = now()
- where status in ('waiting', 'active')
+ where status = 'waiting'
+   and coalesce(authority_version, 0) < 1;
+
+update public.pvp_rooms
+   set status = 'finished',
+       result = '1/2-1/2',
+       winner_color = null,
+       finish_reason = 'abandon',
+       authority_version = 1,
+       updated_at = now()
+ where status = 'active'
    and coalesce(authority_version, 0) < 1;
 
 comment on column public.pvp_rooms.authority_version is
-  '0=旧クライアント権威時代（0010 適用時に waiting/active は abort 済み）。1+=サーバー権威。';
+  '0=旧クライアント権威時代（0010 で waiting abort / active は abandon 終局へ昇格）。1+=サーバー権威。';
 
 comment on table public.pvp_rooms is
   'カジュアル PvP。着手合法性は Edge+chess.js。終局はサーバー導出。'
@@ -431,13 +440,15 @@ begin
   end if;
 
   select * into v_room from public.pvp_rooms where id = p_room_id for update;
-  if not found then raise exception 'room not found'; end if;
+  if not found
+     or (v_uid is distinct from v_room.white_user_id
+         and v_uid is distinct from v_room.black_user_id) then
+    raise exception 'room not found';
+  end if;
+  -- apply_timeouts は参加者確認済み経路からのみ呼ぶ（副審 medium）
   v_room := public.pvp_apply_timeouts(p_room_id);
   if v_room.status is distinct from 'active' then
     return v_room;
-  end if;
-  if v_uid is distinct from v_room.white_user_id and v_uid is distinct from v_room.black_user_id then
-    raise exception 'not a participant';
   end if;
   v_my_color := case when v_uid = v_room.white_user_id then 'white' else 'black' end;
   if v_my_color = 'white'
