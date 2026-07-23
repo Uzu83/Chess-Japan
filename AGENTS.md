@@ -14,6 +14,14 @@
 - 変更後は必ず: `npm run verify`（typecheck → lint → format:check → test → build を一括実行）
 - Edge Function（Deno）は上記で検査されない死角のため別途: `deno check supabase/functions/*/index.ts`
 
+## 品質ゲート（Tier 0〜2）
+
+- 仕様: `docs/QUALITY_GATE.md` / 実行: `node scripts/run-quality-gate.mjs`（skill: `.agents/skills/quality-gate/`）
+- **Tier 0**（lint/型/コメント）: `verify` のみ
+- **Tier 1**（通常 UI・ロジック）: `verify` + 推奨単一 Codex `/review-post`
+- **Tier 2**（auth / migration / Edge / コスト防衛）: `verify` + **3観点並列 Codex**（authz・cost・data）+ **2連続クリーン** + `build-review-packet.mjs`
+- GHAS（CI security.yml）は常時の床。RLS/RPC 信頼境界は Tier 2 の Codex 観点が担当
+
 ## 壊してはいけない不変条件（見出しのみ・全文は CLAUDE.md）
 
 1. **コスト防衛**: `supabase/functions/explain/index.ts` のレート制限/日次クォータ/入力上限/キャッシュ/Turnstile を外さない・緩めない

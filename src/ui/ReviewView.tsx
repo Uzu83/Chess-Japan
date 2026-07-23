@@ -21,6 +21,10 @@ import {
   encodeShareParam,
   decodeShareParam,
 } from '../core/storage';
+import { isAuthConfigured } from '../auth/supabaseClient';
+import { listMyCloudGames, attachUnverifiedAnalysisResult } from '../auth/games';
+import { buildAnalysisPayload } from '../auth/cloudSync';
+import { notifyCloudSyncFailureOnce } from '../auth/cloudSyncNotify';
 import { Board } from './Board';
 import { withMoveLabels, enrichStoredChessContexts } from './moveLabels';
 
@@ -602,8 +606,43 @@ export function ReviewView({
     // トークンが一致している(= 外からキャンセルされていない)なら進捗をクリア
     if (bulkTokenRef.current === myToken) {
       setAnalyzeAllProgress(null);
+      // ログイン済みなら、同一棋譜の自己用クラウド局へ解析を best-effort 添付（F001: unverified）
+      if (isAuthConfigured() && loadedPgn && model) {
+        const snapshot = { ...contextsRef.current };
+        // 直前 setContexts を反映させるため次タスクで読む
+        void (async () => {
+          await new Promise<void>((r) => setTimeout(r, 0));
+          const merged = { ...snapshot, ...contextsRef.current };
+          try {
+            const games = await listMyCloudGames(30);
+            // 同一棋譜でも色違いがありうるため game_kind + record + you_color で照合。
+            // orientation は表示向きであり保存属性ではない（Codex data-F002）。
+            const youColorForMatch = orientation === 'white' ? 'white' : 'black';
+            const match = games.find(
+              (g) =>
+                g.record_text === loadedPgn &&
+                g.game_kind === model.kind &&
+                g.you_color === youColorForMatch,
+            );
+            // 0008: attach は一度だけ。既添付なら再送しない（cost-F002 / ノイズ警告回避）
+            if (!match || match.trust_level !== 'unverified' || match.analysis_payload != null)
+              return;
+            const payload = buildAnalysisPayload({
+              kind: model.kind,
+              youColor: match.you_color,
+              contexts: merged,
+              moves: moveRecords,
+            });
+            if (payload.plies.length === 0) return;
+            const attach = await attachUnverifiedAnalysisResult(match.id, payload);
+            if (!attach.ok) notifyCloudSyncFailureOnce(attach.reason);
+          } catch {
+            // クラウド未設定・未ログイン等は無視
+          }
+        })();
+      }
     }
-  }, [model, moveRecords]); // model/moveRecords。engine は ref 経由、setContexts は安定した setter
+  }, [model, moveRecords, loadedPgn, orientation]); // model/moveRecords。engine は ref 経由、setContexts は安定した setter
 
   // ── キーボードナビゲーション ─────────────────────────────────
   /*

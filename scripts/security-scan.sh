@@ -30,13 +30,23 @@ npm audit --audit-level=high ||
 
 if command -v trivy >/dev/null 2>&1; then
   echo "==> trivy fs (vuln,misconfig,secret)"
-  # CI (security.yml) と同一設定。ignore-unfixed の理由も同じ:
-  # fix が無い CVE で赤くしてもアクション不能でアラート疲れになるだけ。
+  # CI (security.yml) と同一 scanners / ignore-unfixed。
+  # ローカル固有の除外（WHY）: CI の checkout には無い生成物・個人 env を拾うと
+  # 「公開 anon JWT（VITE_*）を secret 扱い」で packet が常時ブロックされる。
+  #   - dist/: ビルド成果（anon key が焼かれるのは設計どおり・gitignored）
+  #   - .env / .env.local: 開発者ローカル（gitignored。本物の秘密はここに置く）
+  #   - node_modules / artifacts / public/engine*: 依存・成果物・WASM コピー
+  # CI はクリーン checkout なので実質同じ対象になる。片方を変えたら両方見直す。
   trivy fs . \
     --scanners vuln,misconfig,secret --ignore-unfixed \
+    --skip-dirs node_modules,dist,dist-ssr,coverage,artifacts,public/engine,public/engine-shogi \
+    --skip-files .env,.env.local \
     --format json --output artifacts/sca/trivy-fs.json
   echo "==> trivy sbom (CycloneDX)"
-  trivy fs . --format cyclonedx --output artifacts/sbom/repo.cdx.json
+  trivy fs . \
+    --skip-dirs node_modules,dist,dist-ssr,coverage,artifacts,public/engine,public/engine-shogi \
+    --skip-files .env,.env.local \
+    --format cyclonedx --output artifacts/sbom/repo.cdx.json
 else
   echo "WARN: trivy 未導入（brew install trivy）。SCA/SBOM をスキップ" >&2
 fi
