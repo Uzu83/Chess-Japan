@@ -25,13 +25,14 @@ migration 0010 → 旧 RPC 死活確認 → Edge `pvp` deploy → 新 client →
 
 ## Cutover（0010 適用時の旧部屋）
 
-- `waiting` + `authority_version<1` → `aborted`（マッチ未成立）
-- `active` + `authority_version<1` → `finished` / `1/2-1/2` / `finish_reason=abandon` /
-  `authority_version=1`（固着回避しつつ双方が `pvp_record_game` 可能）
-- 旧 `finished`（`finish_reason` NULL）は verified 記録対象外のまま
+- `waiting` / `active` + `authority_version<1` → `aborted` + `finish_reason=abandon`
+  （`authority_version` は 0 のまま＝`pvp_record_game` の verified 経路に乗せない）
+- 旧 `finished`（`finish_reason` NULL）も verified 記録対象外のまま
+- トレードオフ: デプロイ瞬間の進行中対局は失効する。未検証 moves を verified に
+  昇格させないことを優先（cycle-16）
 
 ## Consequences
 
 - 案Aの「双方 result 食い違い」は、サーバー確定の room.result により解消方向。
 - AI戦は引き続き unverified。クラウドレート GRANT はしない。
-- デプロイ瞬間の進行中対局は abandon 引き分けになる（旧 RPC DROP との不可避トレードオフ）。
+- 0010 適用前に active 件数を確認し、可能なら低負荷帯で適用する。
