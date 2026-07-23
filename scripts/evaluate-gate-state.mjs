@@ -122,7 +122,19 @@ if (cycleNumbers.length === 0) {
 } else if (consecutiveClear >= REQUIRED_CLEAR) {
   verdict = 'passed';
   message = `${REQUIRED_CLEAR} consecutive clean cycles achieved`;
-} else if (cycleNumbers.length >= MAX_CYCLES && consecutiveClear < REQUIRED_CLEAR) {
+} else if (
+  // WHY total cycles ではなく「末尾の未クリア連続」で上限を見るか:
+  //   修復履歴で cycle 番号が増えても、収束中なら human_required にしない。
+  //   末尾から clear でないサイクルが MAX_CYCLES 続いたときだけ打ち切る。
+  (() => {
+    let trailingUncleared = 0;
+    for (let i = cycleSummaries.length - 1; i >= 0; i--) {
+      if (cycleSummaries[i].clear) break;
+      trailingUncleared += 1;
+    }
+    return trailingUncleared >= MAX_CYCLES;
+  })()
+) {
   verdict = 'human_required';
   message = `Max ${MAX_CYCLES} cycles without ${REQUIRED_CLEAR} consecutive clean`;
 } else if (suspiciousRejectIds.size > 0) {

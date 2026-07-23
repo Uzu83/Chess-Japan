@@ -5,11 +5,11 @@
  *   disabled  → 何も描画しない(App の見た目が従来と完全同一 = 必須要件)
  *   anonymous → 「ログイン」ボタン → AuthDialog（Google/Apple/メール）
  *   loading   → 無効化した同ボタン
- *   signedIn  → 表示名 + 初期設定レートのコンパクトなメニュー
+ *   signedIn  → 表示名 + （あれば）端末レートのコンパクトなメニュー
  *
- * 【2C-1 の意図的な制約 — 未来の担当者へ】
- * クラウドレートの表示はこのメニュー内だけ。PlayView の表示レートはローカルのまま。
- * クラウドへの対局結果の自動反映は未対応（初期設定値のまま）。
+ * 【レート表示の正（ADR 0002）】
+ * ヘッダーに出すのは対局で変動する端末レートのみ。クラウドの初期設定値はメニュー内の
+ * 「初期設定」として分離し、動くレートと見せない（完成度ループ・初見 UX）。
  */
 import { useState } from 'react';
 import { useAuth } from '../auth/authState';
@@ -61,9 +61,9 @@ export function AuthButton({
         className="focus-ai flex min-h-11 items-center gap-1.5 rounded-lg border border-border px-3 text-sm text-on-surface transition-colors hover:border-ai"
       >
         <span className="max-w-28 truncate font-medium">{name}</span>
-        {profile && (
-          <span className="text-xs text-muted" title="クラウドに保存された初期設定レート">
-            {profile.rating}
+        {localRating && (
+          <span className="text-xs text-muted" title="この端末の対局レート（対局結果で変動）">
+            {localRating.rating}
           </span>
         )}
       </button>
@@ -84,21 +84,21 @@ export function AuthButton({
         >
           <div className="text-xs text-muted">
             <p className="truncate font-medium text-on-surface">{name}</p>
-            {profile && (
-              <p className="mt-0.5">
-                初期設定レート: <span className="font-semibold text-ai">{profile.rating}</span>
-                <span className="ml-1">({profile.games}局)</span>
-              </p>
-            )}
             {localRating && (
               <p className="mt-0.5">
-                対局で変動:{' '}
+                対局レート:{' '}
                 <span className="font-semibold text-on-surface">{localRating.rating}</span>
-                <span className="ml-1">({localRating.games}局)</span>
+                <span className="ml-1">({localRating.games}局・この端末)</span>
+              </p>
+            )}
+            {profile && (
+              <p className="mt-0.5">
+                初期設定: <span className="font-semibold text-ai">{profile.rating}</span>
+                <span className="ml-1 text-subtle">（クラウド・固定）</span>
               </p>
             )}
             <p className="mt-1 text-[11px] leading-relaxed text-subtle">
-              クラウドへの対局結果の自動反映は未対応（初期設定値のまま）
+              対局の勝敗は端末レートに反映されます。クラウドの初期設定はオンボーディング時の値です。
             </p>
           </div>
           {onOpenStrength && (

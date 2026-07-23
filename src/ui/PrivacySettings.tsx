@@ -89,12 +89,26 @@ export function PrivacySettings() {
         </label>
       )}
       {publicUrl && (
-        <p className="mt-2 text-xs text-muted">
-          公開 URL:{' '}
-          <a href={publicUrl} className="text-ai underline break-all">
-            {publicUrl}
-          </a>
-        </p>
+        <div className="mt-2 flex flex-col gap-1.5">
+          <p className="text-xs text-muted">
+            公開 URL:{' '}
+            <a href={publicUrl} className="text-ai underline break-all">
+              {publicUrl}
+            </a>
+          </p>
+          <button
+            type="button"
+            className="focus-ai w-fit min-h-11 rounded-lg border border-border px-3 text-xs text-muted hover:border-ai hover:text-on-surface"
+            onClick={() => {
+              void navigator.clipboard.writeText(publicUrl).then(
+                () => setMsg('公開 URL をコピーしました'),
+                () => setMsg('コピーに失敗しました'),
+              );
+            }}
+          >
+            URL をコピー
+          </button>
+        </div>
       )}
       <button
         type="button"

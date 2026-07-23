@@ -96,21 +96,31 @@ export function StrengthProfileView({ onBack }: { onBack: () => void }) {
   const [cloud, setCloud] = useState<CloudGame[]>([]);
   const [localByGame, setLocalByGame] = useState<Map<string, AnalyzedPly[]>>(() => new Map());
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
-      const local = await collectLocalPliesByGame();
-      if (cancelled) return;
-      setLocalByGame(local);
-      if (status === 'signedIn' && isAuthConfigured()) {
-        const rows = await listMyCloudGames(100);
-        if (!cancelled) setCloud(rows);
-      } else {
-        setCloud([]);
+      setLoadError(null);
+      try {
+        const local = await collectLocalPliesByGame();
+        if (cancelled) return;
+        setLocalByGame(local);
+        if (status === 'signedIn' && isAuthConfigured()) {
+          const rows = await listMyCloudGames(100);
+          if (!cancelled) setCloud(rows);
+        } else if (!cancelled) {
+          setCloud([]);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setLoadError(e instanceof Error ? e.message : String(e));
+          setCloud([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      if (!cancelled) setLoading(false);
     })();
     return () => {
       cancelled = true;
@@ -143,6 +153,12 @@ export function StrengthProfileView({ onBack }: { onBack: () => void }) {
       </p>
 
       {loading && <p className="text-sm text-muted">読み込み中…</p>}
+
+      {!loading && loadError && (
+        <p className="mb-3 text-sm text-[var(--q-miss-fg)]" role="status">
+          一部データの取得に失敗しました（{loadError}）。端末履歴のみで集計します。
+        </p>
+      )}
 
       {!loading && !report && (
         <p className="text-sm text-muted">
