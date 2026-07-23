@@ -231,7 +231,12 @@ Deno.serve(async (req) => {
   }
 
   const room = await fetchRoom(roomId);
-  if (!room) {
+  // WHY 参加者判定を status 検査より先にするか（Codex authz cycle-11 F001）:
+  //   非参加者に 404/409/403 の差を返すと部屋の存在・進行状態がオラクルになる。
+  //   行なしと非参加者は同一 404 に合流させる。
+  const white = (room?.['white_user_id'] as string | null) ?? null;
+  const black = (room?.['black_user_id'] as string | null) ?? null;
+  if (!room || (uid !== white && uid !== black)) {
     return new Response(JSON.stringify({ error: 'room not found' }), {
       status: 404,
       headers: cors.headers,
@@ -240,15 +245,6 @@ Deno.serve(async (req) => {
   if (room['status'] !== 'active') {
     return new Response(JSON.stringify({ error: 'room not active' }), {
       status: 409,
-      headers: cors.headers,
-    });
-  }
-
-  const white = room['white_user_id'] as string | null;
-  const black = room['black_user_id'] as string | null;
-  if (uid !== white && uid !== black) {
-    return new Response(JSON.stringify({ error: 'forbidden' }), {
-      status: 403,
       headers: cors.headers,
     });
   }

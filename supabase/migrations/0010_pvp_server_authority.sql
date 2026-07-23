@@ -466,7 +466,14 @@ begin
   end if;
 
   select * into v_room from public.pvp_rooms where id = p_room_id for update;
-  if not found then raise exception 'room not found'; end if;
+  -- WHY 参加者チェックを status より先にするか（Codex authz cycle-11 F002）:
+  --   非参加者に finished / authority のエラー差を返すと状態オラクルになる。
+  --   不存在と非参加者は同一 'room not found' に合流させる。
+  if not found
+     or (v_uid is distinct from v_room.white_user_id
+         and v_uid is distinct from v_room.black_user_id) then
+    raise exception 'room not found';
+  end if;
 
   if v_room.status is distinct from 'finished' then
     raise exception 'room not finished';
@@ -475,10 +482,6 @@ begin
   -- 旧自己申告 finished / 旧権威部屋は verified に昇格させない
   if v_room.finish_reason is null or coalesce(v_room.authority_version, 0) < 1 then
     raise exception 'room not server-authoritative';
-  end if;
-
-  if v_uid is distinct from v_room.white_user_id and v_uid is distinct from v_room.black_user_id then
-    raise exception 'not a participant';
   end if;
 
   if exists (
@@ -565,10 +568,19 @@ begin
     raise exception 'shogi pvp not available';
   end if;
 
-  -- GC は低頻度スロットル付きで join から呼ぶ（毎回グローバル走査しない）。
-  if public.rate_check('pvp:gc:global', 1, 60) then
-    perform public.pvp_gc_stale_rooms();
+  -- WHY GC を例外経路の前に置かないか（Codex cost cycle-11 F001）:
+  --   rate_check / GC の副作用は同一トランザクション内。quota/rate exception で
+  --   ロールバックされると `pvp:gc:global` 消費も戻り、クォータ超過ユーザーが
+  --   毎回全表 GC を再実行できる。よって raise しうる検査を先に済ませ、
+  --   成功確定後だけスロットル付き GC を呼ぶ。
+  select count(*) into v_recent
+    from public.pvp_rooms
+   where (white_user_id = v_uid or black_user_id = v_uid)
+     and created_at > now() - interval '60 seconds';
+  if v_recent >= 5 then
+    raise exception 'rate limited: too many pvp joins';
   end if;
+
   perform pg_advisory_xact_lock(hashtext('cj:pvp:' || v_uid::text));
 
   select * into v_room
@@ -584,16 +596,11 @@ begin
          set status = 'aborted', updated_at = now()
        where id = v_room.id;
     else
+      if public.rate_check('pvp:gc:global', 1, 60) then
+        perform public.pvp_gc_stale_rooms();
+      end if;
       return v_room;
     end if;
-  end if;
-
-  select count(*) into v_recent
-    from public.pvp_rooms
-   where (white_user_id = v_uid or black_user_id = v_uid)
-     and created_at > now() - interval '60 seconds';
-  if v_recent >= 5 then
-    raise exception 'rate limited: too many pvp joins';
   end if;
 
   select * into v_room
@@ -618,6 +625,9 @@ begin
            updated_at = now()
      where id = v_room.id
     returning * into v_room;
+    if public.rate_check('pvp:gc:global', 1, 60) then
+      perform public.pvp_gc_stale_rooms();
+    end if;
     return v_room;
   end if;
 
@@ -627,6 +637,11 @@ begin
      and created_at > now() - interval '1 day';
   if v_day_white >= 30 then
     raise exception 'rate limited: daily room create quota';
+  end if;
+
+  -- 新規 waiting 作成が確定した直後のみ GC（この先は raise しない）。
+  if public.rate_check('pvp:gc:global', 1, 60) then
+    perform public.pvp_gc_stale_rooms();
   end if;
 
   insert into public.pvp_rooms (
