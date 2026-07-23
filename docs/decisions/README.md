@@ -6,4 +6,5 @@
   - [0001 — free quota / account abuse](0001-free-quota-account-abuse-defense.md)
   - [0002 — unverified AI games / no cloud rating](0002-unverified-ai-games-no-cloud-rating.md)
   - [0003 — PvP server validation](0003-pvp-server-validation.md)
+  - [0004 — PvP incomplete finished retention](0004-pvp-incomplete-finished-retention.md)
 - 過去の判断（Next.js 不採用・コスト防衛設計 等）は `docs/PLAN.md` に記録済みで、そのまま（移植しない）。

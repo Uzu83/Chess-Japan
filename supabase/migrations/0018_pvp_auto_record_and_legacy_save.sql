@@ -318,34 +318,8 @@ begin
    where status = 'aborted'
      and updated_at < now() - interval '7 days';
 
-  -- 両席揃い: 90 日。欠落 finished は削除しない（GC ensure が quota 緩和で埋める）
-  delete from public.pvp_rooms pr
-   where pr.status = 'finished'
-     and pr.updated_at < now() - interval '90 days'
-     and (pr.white_user_id is null or exists (
-       select 1 from public.games g
-        where g.pvp_room_id = pr.id and g.user_id = pr.white_user_id
-     ))
-     and (pr.black_user_id is null or exists (
-       select 1 from public.games g
-        where g.pvp_room_id = pr.id and g.user_id = pr.black_user_id
-     ))
-     and (pr.white_user_id is not null or pr.black_user_id is not null);
-
-  -- 欠落 finished は 180 日で絶対削除（コスト: 無期限蓄積禁止）。
-  -- 日次40で埋まる前に期限が来た場合の棋譜喪失は運用契約（quota 緩和は別判断）。
-  delete from public.pvp_rooms
-   where status = 'finished'
-     and updated_at < now() - interval '180 days'
-     and (
-       (white_user_id is not null and not exists (
-         select 1 from public.games g where g.pvp_room_id = pvp_rooms.id and g.user_id = white_user_id
-       ))
-       or
-       (black_user_id is not null and not exists (
-         select 1 from public.games g where g.pvp_room_id = pvp_rooms.id and g.user_id = black_user_id
-       ))
-     );
+  -- finished の 90d/180d 退役・DELETE は 0019（archive+stub）と同一配備で行う。
+  -- WHY ここで消さないか: 0018 単独適用→0019 前の窓で権威棋譜が不可逆削除されるため（Tier2 data）。
 end;
 $$;
 
