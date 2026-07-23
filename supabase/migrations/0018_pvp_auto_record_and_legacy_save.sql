@@ -7,7 +7,12 @@
 -- ---------------------------------------------------------------------------
 -- G002: ensure（room 行は呼び出し元がロック済みでも可。未ロックならここで取る）
 -- ---------------------------------------------------------------------------
-create or replace function public.pvp_ensure_verified_records(p_room_id uuid)
+drop function if exists public.pvp_ensure_verified_records(uuid);
+
+create or replace function public.pvp_ensure_verified_records(
+  p_room_id uuid,
+  p_relax_daily_quota boolean default false
+)
 returns void
 language plpgsql
 security definer
@@ -71,11 +76,14 @@ begin
       continue;
     end if;
 
-    select count(*) into v_day from public.games
-     where user_id = v_uid and mode = 'pvp' and trust_level = 'verified'
-       and created_at > now() - interval '1 day';
-    if v_day >= 40 then
-      continue;
+    -- 終局トリガは日次40を守る。GC バックフィルのみ緩和（権威棋譜の永久欠落防止）
+    if not coalesce(p_relax_daily_quota, false) then
+      select count(*) into v_day from public.games
+       where user_id = v_uid and mode = 'pvp' and trust_level = 'verified'
+         and created_at > now() - interval '1 day';
+      if v_day >= 40 then
+        continue;
+      end if;
     end if;
 
     if v_uid = v_room.white_user_id then
@@ -111,13 +119,13 @@ begin
 end;
 $$;
 
-revoke all on function public.pvp_ensure_verified_records(uuid)
+revoke all on function public.pvp_ensure_verified_records(uuid, boolean)
   from public, anon, authenticated;
-grant execute on function public.pvp_ensure_verified_records(uuid) to service_role;
+grant execute on function public.pvp_ensure_verified_records(uuid, boolean) to service_role;
 
-comment on function public.pvp_ensure_verified_records(uuid) is
+comment on function public.pvp_ensure_verified_records(uuid, boolean) is
   'finished+authority の両者 verified を冪等保存。room FOR UPDATE→uid advisory。'
-  '日次40超過はスキップ（後続 GC バッチで再試行）。';
+  'p_relax_daily_quota=false（トリガ）: 日次40。true（GC）: バックフィル優先。';
 
 create or replace function public.pvp_trg_ensure_verified_records()
 returns trigger
@@ -128,7 +136,7 @@ as $$
 begin
   if NEW.status = 'finished'
      and (TG_OP = 'INSERT' or OLD.status is distinct from 'finished') then
-    perform public.pvp_ensure_verified_records(NEW.id);
+    perform public.pvp_ensure_verified_records(NEW.id, false);
   end if;
   return NEW;
 end;
@@ -307,14 +315,14 @@ begin
      order by pr.updated_at asc
      limit 25
   loop
-    perform public.pvp_ensure_verified_records(r.id);
+    perform public.pvp_ensure_verified_records(r.id, true);
   end loop;
 
   delete from public.pvp_rooms
    where status = 'aborted'
      and updated_at < now() - interval '7 days';
 
-  -- 両席揃い: 90 日
+  -- 両席揃い: 90 日。欠落 finished は削除しない（GC ensure が quota 緩和で埋める）
   delete from public.pvp_rooms pr
    where pr.status = 'finished'
      and pr.updated_at < now() - interval '90 days'
@@ -327,11 +335,6 @@ begin
         where g.pvp_room_id = pr.id and g.user_id = pr.black_user_id
      ))
      and (pr.white_user_id is not null or pr.black_user_id is not null);
-
-  -- 欠落が残る finished も 180 日で打ち切り（無限保持・再試行の打ち止め）
-  delete from public.pvp_rooms
-   where status = 'finished'
-     and updated_at < now() - interval '180 days';
 end;
 $$;
 
@@ -487,9 +490,22 @@ grant execute on function public.save_unverified_ai_game(
   text, text, text, text, integer, text, text, jsonb, text
 ) to authenticated;
 
--- 8 引数互換: 内容 fingerprint は別対局衝突のため使わない（Codex data cycle-46）。
--- 呼び出しごと UUID＝旧SPA同様に再送は重複し得る。分次/日次クォータで枠は守る。
--- 移行窓専用。後続 migration で DROP 予定。新クライアントは 9 引数必須。
+-- 短時間 dedupe（10分）。games の恒久 idempotency には内容を載せない。
+create table if not exists public.legacy_ai_save_dedupe (
+  user_id uuid not null references auth.users (id) on delete cascade,
+  fingerprint text not null,
+  game_id uuid not null references public.games (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (user_id, fingerprint)
+);
+
+alter table public.legacy_ai_save_dedupe enable row level security;
+revoke all on table public.legacy_ai_save_dedupe from public, anon, authenticated;
+
+create index if not exists legacy_ai_save_dedupe_created_at_idx
+  on public.legacy_ai_save_dedupe (created_at);
+
+-- 8 引数互換: 10分窓 dedupe + 新規は UUID キー。移行窓専用・後続 DROP 予定。
 create or replace function public.save_unverified_ai_game(
   p_game_kind text,
   p_you_color text,
@@ -507,10 +523,40 @@ as $$
 declare
   v_uid uuid := auth.uid();
   v_key text;
+  v_fp text;
+  v_row public.games;
+  v_game_id uuid;
 begin
   if v_uid is null then raise exception 'not authenticated'; end if;
+
+  v_fp := md5(
+    v_uid::text || E'\n' ||
+    coalesce(p_game_kind, '') || E'\n' ||
+    coalesce(p_you_color, '') || E'\n' ||
+    coalesce(p_outcome, '') || E'\n' ||
+    coalesce(p_result, '') || E'\n' ||
+    coalesce(p_move_count::text, '') || E'\n' ||
+    coalesce(p_opponent_label, '') || E'\n' ||
+    left(coalesce(p_record_text, ''), 4000)
+  );
+
+  perform pg_advisory_xact_lock(hashtext('cj:legacy8:' || v_uid::text));
+
+  delete from public.legacy_ai_save_dedupe
+   where user_id = v_uid and created_at < now() - interval '1 day';
+
+  select d.game_id into v_game_id
+    from public.legacy_ai_save_dedupe d
+   where d.user_id = v_uid
+     and d.fingerprint = v_fp
+     and d.created_at > now() - interval '10 minutes';
+  if v_game_id is not null then
+    select * into v_row from public.games where id = v_game_id and user_id = v_uid;
+    if found then return v_row; end if;
+  end if;
+
   v_key := 'compat8:' || gen_random_uuid()::text;
-  return public.save_unverified_ai_game(
+  v_row := public.save_unverified_ai_game(
     p_game_kind,
     p_you_color,
     p_outcome,
@@ -521,6 +567,14 @@ begin
     p_analysis_payload,
     v_key
   );
+
+  insert into public.legacy_ai_save_dedupe (user_id, fingerprint, game_id)
+  values (v_uid, v_fp, v_row.id)
+  on conflict (user_id, fingerprint) do update
+    set game_id = excluded.game_id,
+        created_at = now();
+
+  return v_row;
 end;
 $$;
 
@@ -534,5 +588,5 @@ grant execute on function public.save_unverified_ai_game(
 comment on function public.save_unverified_ai_game(
   text, text, text, text, integer, text, text, jsonb
 ) is
-  '移行窓: 旧SPA 8引数。キーは呼び出しごと UUID（内容 fingerprint 禁止）。後続 DROP 予定。'
-  '新クライアントは 9 引数（idempotency_key 必須・default なし）。';
+  '移行窓: 旧SPA 8引数。10分窓 dedupe 表で再送抑制。games 恒久キーには内容を載せない。'
+  '後続 DROP 予定。新クライアントは 9 引数（idempotency_key 必須・default なし）。';
