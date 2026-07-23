@@ -20,6 +20,7 @@ declare
   v_opp uuid;
   v_move_count integer;
   v_record text;
+  v_day integer;
 begin
   -- 呼び出し元が既に行ロックしていることがあるため FOR UPDATE はしない
   select * into v_room from public.pvp_rooms where id = p_room_id;
@@ -62,6 +63,15 @@ begin
       continue;
     end if;
 
+    -- 日次40はクライアント経路と同額。超過時は未保存のまま残し、後続 GC ensure で再試行
+    -- （無制限 INSERT でコスト防衛を迂回しない — Codex cost cycle-42）
+    select count(*) into v_day from public.games
+     where user_id = v_uid and mode = 'pvp' and trust_level = 'verified'
+       and created_at > now() - interval '1 day';
+    if v_day >= 40 then
+      continue;
+    end if;
+
     if v_uid = v_room.white_user_id then
       v_my_color := 'white';
       v_opp := v_room.black_user_id;
@@ -100,7 +110,8 @@ revoke all on function public.pvp_ensure_verified_records(uuid)
 grant execute on function public.pvp_ensure_verified_records(uuid) to service_role;
 
 comment on function public.pvp_ensure_verified_records(uuid) is
-  'finished+authority の両者 verified を冪等保存。終局トリガ / GC から呼ぶ。日次クォータ対象外（権威棋譜保全）。';
+  'finished+authority の両者 verified を冪等保存。終局トリガ / GC から呼ぶ。'
+  '日次40超過時はスキップ（room は未記録のまま保持し後続 ensure で再試行）。';
 
 create or replace function public.pvp_trg_ensure_verified_records()
 returns trigger
@@ -150,14 +161,22 @@ begin
      and coalesce(black_last_seen, updated_at) < now() - interval '10 minutes';
   -- 上記 update はトリガで ensure される
 
-  -- トリガ漏れ・適用前の finished 向けに回収を試す
+  -- 参加者ごとの行が欠けている finished を回収（片側だけ保存済みも含む）
   for r in
-    select id from public.pvp_rooms pr
+    select pr.id from public.pvp_rooms pr
      where pr.status = 'finished'
        and pr.finish_reason is not null
        and coalesce(pr.authority_version, 0) >= 1
-       and not exists (
-         select 1 from public.games g where g.pvp_room_id = pr.id
+       and (
+         (pr.white_user_id is not null and not exists (
+           select 1 from public.games g
+            where g.pvp_room_id = pr.id and g.user_id = pr.white_user_id
+         ))
+         or
+         (pr.black_user_id is not null and not exists (
+           select 1 from public.games g
+            where g.pvp_room_id = pr.id and g.user_id = pr.black_user_id
+         ))
        )
   loop
     perform public.pvp_ensure_verified_records(r.id);
@@ -167,13 +186,19 @@ begin
    where status = 'aborted'
      and updated_at < now() - interval '7 days';
 
-  -- 未記録 finished は削除しない（G002: 権威棋譜を落とさない）
-  delete from public.pvp_rooms
-   where status = 'finished'
-     and updated_at < now() - interval '90 days'
-     and exists (
-       select 1 from public.games g where g.pvp_room_id = pvp_rooms.id
-     );
+  -- 両参加者分が揃った finished のみ 90 日後削除（片側欠落は残す — Codex data cycle-42）
+  delete from public.pvp_rooms pr
+   where pr.status = 'finished'
+     and pr.updated_at < now() - interval '90 days'
+     and (pr.white_user_id is null or exists (
+       select 1 from public.games g
+        where g.pvp_room_id = pr.id and g.user_id = pr.white_user_id
+     ))
+     and (pr.black_user_id is null or exists (
+       select 1 from public.games g
+        where g.pvp_room_id = pr.id and g.user_id = pr.black_user_id
+     ))
+     and (pr.white_user_id is not null or pr.black_user_id is not null);
 end;
 $$;
 
@@ -202,17 +227,9 @@ declare
   v_key text;
 begin
   if v_uid is null then raise exception 'not authenticated'; end if;
-  -- 旧クライアントはキーを送らない。内容ハッシュで再送冪等を近似する。
-  v_key := 'compat8:' || md5(
-    v_uid::text || E'\n' ||
-    coalesce(p_game_kind, '') || E'\n' ||
-    coalesce(p_you_color, '') || E'\n' ||
-    coalesce(p_outcome, '') || E'\n' ||
-    coalesce(p_result, '') || E'\n' ||
-    coalesce(p_move_count::text, '') || E'\n' ||
-    coalesce(p_opponent_label, '') || E'\n' ||
-    left(coalesce(p_record_text, ''), 4000)
-  );
+  -- 旧SPAは冪等キーを持たない。内容ハッシュは別対局を潰し得るため使わない
+  -- （Codex data cycle-42）。呼び出しごとに新規キー＝旧挙動に近い再送は重複し得る。
+  v_key := 'compat8:' || gen_random_uuid()::text;
   return public.save_unverified_ai_game(
     p_game_kind,
     p_you_color,
@@ -237,4 +254,5 @@ grant execute on function public.save_unverified_ai_game(
 comment on function public.save_unverified_ai_game(
   text, text, text, text, integer, text, text, jsonb
 ) is
-  '移行窓: 旧SPA 8引数互換。キーは内容ハッシュ。新クライアントは 9 引数を使うこと。';
+  '移行窓: 旧SPA 8引数互換。キーは呼び出しごと UUID（内容ハッシュは使わない）。'
+  '新クライアントは 9 引数を使うこと。';
