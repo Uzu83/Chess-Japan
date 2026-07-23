@@ -332,11 +332,20 @@ begin
      ))
      and (pr.white_user_id is not null or pr.black_user_id is not null);
 
-  -- 手数0の欠落 finished のみ 180 日削除（ノイズ）。棋譜あり欠落は残す（Codex data cycle-56）
+  -- 欠落 finished は 180 日で絶対削除（コスト: 無期限蓄積禁止）。
+  -- 日次40で埋まる前に期限が来た場合の棋譜喪失は運用契約（quota 緩和は別判断）。
   delete from public.pvp_rooms
    where status = 'finished'
      and updated_at < now() - interval '180 days'
-     and coalesce(jsonb_array_length(moves), 0) = 0;
+     and (
+       (white_user_id is not null and not exists (
+         select 1 from public.games g where g.pvp_room_id = pvp_rooms.id and g.user_id = white_user_id
+       ))
+       or
+       (black_user_id is not null and not exists (
+         select 1 from public.games g where g.pvp_room_id = pvp_rooms.id and g.user_id = black_user_id
+       ))
+     );
 end;
 $$;
 
