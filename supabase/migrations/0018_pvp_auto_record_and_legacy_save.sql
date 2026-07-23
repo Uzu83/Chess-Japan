@@ -254,21 +254,38 @@ as $$
 declare
   r record;
 begin
-  update public.pvp_rooms
+  -- waiting / abandon も1回25件まで（トリガ ensure の無制限発火防止 — Codex cost cycle-45/46）
+  with victims as (
+    select id from public.pvp_rooms
+     where status = 'waiting'
+       and created_at < now() - interval '10 minutes'
+     order by created_at asc
+     limit 25
+     for update skip locked
+  )
+  update public.pvp_rooms pr
      set status = 'aborted', updated_at = now()
-   where status = 'waiting'
-     and created_at < now() - interval '10 minutes';
+    from victims v
+   where pr.id = v.id;
 
-  update public.pvp_rooms
+  with victims as (
+    select id from public.pvp_rooms
+     where status = 'active'
+       and updated_at < now() - interval '10 minutes'
+       and coalesce(white_last_seen, updated_at) < now() - interval '10 minutes'
+       and coalesce(black_last_seen, updated_at) < now() - interval '10 minutes'
+     order by updated_at asc
+     limit 25
+     for update skip locked
+  )
+  update public.pvp_rooms pr
      set status = 'finished',
          result = '1/2-1/2',
          winner_color = null,
          finish_reason = 'abandon',
          updated_at = now()
-   where status = 'active'
-     and updated_at < now() - interval '10 minutes'
-     and coalesce(white_last_seen, updated_at) < now() - interval '10 minutes'
-     and coalesce(black_last_seen, updated_at) < now() - interval '10 minutes';
+    from victims v
+   where pr.id = v.id;
 
   -- 欠落回収は1回最大25件（無制限ループ禁止 — Codex cost cycle-44）
   for r in
@@ -470,8 +487,9 @@ grant execute on function public.save_unverified_ai_game(
   text, text, text, text, integer, text, text, jsonb, text
 ) to authenticated;
 
--- 8 引数互換: 時間窓付き fingerprint（同一時間帯の再送のみ重複排除）
--- 移行窓専用。新クライアントは 9 引数必須。互換 RPC は後続 migration で DROP 予定。
+-- 8 引数互換: 内容 fingerprint は別対局衝突のため使わない（Codex data cycle-46）。
+-- 呼び出しごと UUID＝旧SPA同様に再送は重複し得る。分次/日次クォータで枠は守る。
+-- 移行窓専用。後続 migration で DROP 予定。新クライアントは 9 引数必須。
 create or replace function public.save_unverified_ai_game(
   p_game_kind text,
   p_you_color text,
@@ -489,20 +507,9 @@ as $$
 declare
   v_uid uuid := auth.uid();
   v_key text;
-  v_window text;
 begin
   if v_uid is null then raise exception 'not authenticated'; end if;
-  v_window := to_char(date_trunc('hour', now() at time zone 'utc'), 'YYYYMMDDHH24');
-  v_key := 'compat8:' || md5(
-    v_uid::text || E'\n' || v_window || E'\n' ||
-    coalesce(p_game_kind, '') || E'\n' ||
-    coalesce(p_you_color, '') || E'\n' ||
-    coalesce(p_outcome, '') || E'\n' ||
-    coalesce(p_result, '') || E'\n' ||
-    coalesce(p_move_count::text, '') || E'\n' ||
-    coalesce(p_opponent_label, '') || E'\n' ||
-    left(coalesce(p_record_text, ''), 4000)
-  );
+  v_key := 'compat8:' || gen_random_uuid()::text;
   return public.save_unverified_ai_game(
     p_game_kind,
     p_you_color,
@@ -527,5 +534,5 @@ grant execute on function public.save_unverified_ai_game(
 comment on function public.save_unverified_ai_game(
   text, text, text, text, integer, text, text, jsonb
 ) is
-  '移行窓: 旧SPA 8引数。UTC 時間窓+内容 fingerprint。後続で DROP 予定。'
+  '移行窓: 旧SPA 8引数。キーは呼び出しごと UUID（内容 fingerprint 禁止）。後続 DROP 予定。'
   '新クライアントは 9 引数（idempotency_key 必須・default なし）。';
