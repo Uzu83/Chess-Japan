@@ -281,24 +281,12 @@ Deno.serve(async (req) => {
       headers,
     );
 
+  // 分/日(IP) は洪水防壁として早期。グローバル日次枠は検証成功後のみ消費
+  // （Codex cost cycle-22: 不正 JSON で共有枠を枯らさない）。
   const dayIp = await rateCheck(`fb:day:ip:${ip}`, RATE_PER_DAY_IP, 86400);
   if (dayIp === 'limited')
     return jsonResponse(429, withFallback({ ok: false, error: 'daily quota exceeded' }), headers);
   if (dayIp === 'error' && ENFORCE_STORE)
-    return jsonResponse(
-      503,
-      withFallback({ ok: false, error: 'rate limiter unavailable' }),
-      headers,
-    );
-
-  const dayGlobal = await rateCheck('fb:day:global', RATE_GLOBAL_DAY, 86400);
-  if (dayGlobal === 'limited')
-    return jsonResponse(
-      429,
-      withFallback({ ok: false, error: 'global daily quota exceeded' }),
-      headers,
-    );
-  if (dayGlobal === 'error' && ENFORCE_STORE)
     return jsonResponse(
       503,
       withFallback({ ok: false, error: 'rate limiter unavailable' }),
@@ -325,6 +313,20 @@ Deno.serve(async (req) => {
   if (!validated.ok) {
     return jsonResponse(400, withFallback({ ok: false, error: validated.error }), headers);
   }
+
+  const dayGlobal = await rateCheck('fb:day:global', RATE_GLOBAL_DAY, 86400);
+  if (dayGlobal === 'limited')
+    return jsonResponse(
+      429,
+      withFallback({ ok: false, error: 'global daily quota exceeded' }),
+      headers,
+    );
+  if (dayGlobal === 'error' && ENFORCE_STORE)
+    return jsonResponse(
+      503,
+      withFallback({ ok: false, error: 'rate limiter unavailable' }),
+      headers,
+    );
 
   const receivedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
   const title = buildFeedbackIssueTitle(validated.value.kind, receivedAt);

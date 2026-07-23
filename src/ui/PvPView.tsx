@@ -112,14 +112,19 @@ export function PvPView({ onBack }: { onBack: () => void }) {
   }, [room?.moves]);
 
   // finished → 本人履歴をサーバー生成で冪等保存
+  // WHY recordedRef は成功後のみ立てるか（Codex data cycle-22）:
+  //   失敗前に立てると同一マウント中の再試行が永久に抑止される。
   useEffect(() => {
     if (!room || room.status !== 'finished' || !myColor) return;
     if (recordedRef.current === room.id) return;
-    recordedRef.current = room.id;
-    void pvpRecordGame(room.id)
-      .then((r) => setRoom(r))
+    const id = room.id;
+    void pvpRecordGame(id)
+      .then((r) => {
+        recordedRef.current = id;
+        setRoom(r);
+      })
       .catch(() => {
-        // 既に本人行がある等は無視
+        // 一時失敗は再試行可。冪等 RPC なので成功後の重複は無害。
       });
   }, [room, myColor]);
 
