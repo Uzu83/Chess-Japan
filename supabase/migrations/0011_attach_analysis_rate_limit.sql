@@ -1,7 +1,8 @@
--- 0011: attach_unverified_analysis — レート制限 + 0008 の一度限り添付を復元
--- Codex cost cycle-22 / data cycle-23:
---   - 無制限再書き込み防止（uid 12/分）
---   - analysis_payload IS NULL のみ更新（0011 再定義で欠落させない）
+-- 0011: attach_unverified_analysis — 一度限り添付 + 書き込み直前レート制限
+-- Codex cost cycle-22/24:
+--   - analysis_payload IS NULL のみ更新（0008 契約）
+--   - 既添付への異 payload 拒否は rate_check より前（失敗経路でカウンタを巻き戻させない）
+--   - 新規添付直前のみ uid 12/分
 -- explain_cache / rate_counters RLS・GRANT、apply_rated_result GRANT には触れない。
 
 create or replace function public.attach_unverified_analysis(
@@ -39,23 +40,27 @@ begin
     end if;
   end if;
 
-  v_allowed := public.rate_check('attach:uid:' || v_uid::text, 12, 60);
-  if not coalesce(v_allowed, false) then
-    raise exception 'rate limited';
-  end if;
-
-  -- 同一 payload の再送は冪等成功（レートは消費済み）。別内容の上書きは拒否。
   select * into v_row
     from public.games
    where id = p_game_id
      and user_id = v_uid
      and trust_level = 'unverified'
      and mode = 'ai';
-  if found and v_row.analysis_payload is not null then
+  if not found then
+    raise exception 'game not found';
+  end if;
+
+  -- 既添付: 同一なら冪等成功、異内容なら拒否。いずれも rate_check 前（cycle-24）。
+  if v_row.analysis_payload is not null then
     if v_row.analysis_payload = p_analysis_payload then
       return v_row;
     end if;
     raise exception 'game not found';
+  end if;
+
+  v_allowed := public.rate_check('attach:uid:' || v_uid::text, 12, 60);
+  if not coalesce(v_allowed, false) then
+    raise exception 'rate limited';
   end if;
 
   update public.games
@@ -78,4 +83,4 @@ revoke all on function public.attach_unverified_analysis(uuid, jsonb) from publi
 grant execute on function public.attach_unverified_analysis(uuid, jsonb) to authenticated;
 
 comment on function public.attach_unverified_analysis(uuid, jsonb) is
-  '自己対局への解析後付け（一度限り）。uid 12/分。unverified・ai のみ。';
+  '自己対局への解析後付け（一度限り）。新規添付のみ uid 12/分。';
