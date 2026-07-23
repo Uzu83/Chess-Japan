@@ -118,14 +118,23 @@ export function PvPView({ onBack }: { onBack: () => void }) {
     if (!room || room.status !== 'finished' || !myColor) return;
     if (recordedRef.current === room.id) return;
     const id = room.id;
-    void pvpRecordGame(id)
-      .then((r) => {
-        recordedRef.current = id;
-        setRoom(r);
-      })
-      .catch(() => {
-        // 一時失敗は再試行可。冪等 RPC なので成功後の重複は無害。
-      });
+    let cancelled = false;
+    const attempt = (n: number) => {
+      void pvpRecordGame(id)
+        .then((r) => {
+          if (cancelled) return;
+          recordedRef.current = id;
+          setRoom(r);
+        })
+        .catch(() => {
+          if (cancelled || n >= 3) return;
+          window.setTimeout(() => attempt(n + 1), 500 * n);
+        });
+    };
+    attempt(1);
+    return () => {
+      cancelled = true;
+    };
   }, [room, myColor]);
 
   // heartbeat（15s）。相手無応答ヒント用。
