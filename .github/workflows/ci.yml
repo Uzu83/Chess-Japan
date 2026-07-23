@@ -84,7 +84,6 @@ jobs:
           deno install
           deno check */index.ts
 
-
   secret-scan:
     runs-on: ubuntu-latest
     steps:
