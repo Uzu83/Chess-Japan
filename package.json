@@ -32,7 +32,7 @@
     "chess.js": "^1.4.0",
     "chessground": "^9.2.1",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1",
+    "react-dom": "^19.2.8",
     "shogiground": "0.10.3",
     "stockfish": "^18.0.8",
     "tsshogi": "2.3.4"
