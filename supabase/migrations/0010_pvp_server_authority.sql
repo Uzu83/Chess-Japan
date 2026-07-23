@@ -27,12 +27,21 @@ alter table public.pvp_rooms
     ),
   add column if not exists authority_version integer not null default 0;
 
--- 既存 waiting/active は authority_version=0 のまま残す（完了は新クライアント経由で
--- authority_version が 1 に上がる。旧 finished は finish_reason NULL のため record 不可）。
--- 一括 abort はしない（進行中対局の不可逆破壊を避ける。A2 data finding）。
+-- WHY 既存 waiting/active を一括 abort するか（Codex data cycle-13 F001）:
+--   旧 pvp_submit_move / pvp_finalize は本 migration で DROP し、新 pvp_apply_move は
+--   authority_version<1 を拒否する。0 のまま残すと進行中対局は着手も終局もできず
+--   固着する。再キュー時 abort だけだと「途中放棄」と同じなので、適用時点で明示
+--   abort し、新規マッチは authority_version=1 から始める。
+--   旧 finished（finish_reason NULL）は verified record 対象外のまま（意図どおり）。
+update public.pvp_rooms
+   set status = 'aborted',
+       finish_reason = coalesce(finish_reason, 'abandon'),
+       updated_at = now()
+ where status in ('waiting', 'active')
+   and coalesce(authority_version, 0) < 1;
 
 comment on column public.pvp_rooms.authority_version is
-  '0=旧クライアント権威時代。1+=0010 サーバー権威（Edge/resign/timeout）。';
+  '0=旧クライアント権威時代（0010 適用時に waiting/active は abort 済み）。1+=サーバー権威。';
 
 comment on table public.pvp_rooms is
   'カジュアル PvP。着手合法性は Edge+chess.js。終局はサーバー導出。'
@@ -270,13 +279,20 @@ begin
     if p_result = '1/2-1/2' and p_winner_color is not null then
       raise exception 'result/winner mismatch';
     end if;
+    -- 着手経路の終局理由は棋理由来のみ（resign/timeout/abandon は専用 RPC）
+    if p_finish_reason is null
+       or p_finish_reason not in (
+         'checkmate', 'stalemate', 'insufficient', 'threefold', 'fiftyMove'
+       ) then
+      raise exception 'invalid finish_reason for move';
+    end if;
     update public.pvp_rooms
        set moves = v_moves,
            fen = p_fen,
            status = 'finished',
            result = p_result,
            winner_color = p_winner_color,
-           finish_reason = coalesce(p_finish_reason, 'checkmate'),
+           finish_reason = p_finish_reason,
            white_last_seen = case when v_my_color = 'white' then now() else white_last_seen end,
            black_last_seen = case when v_my_color = 'black' then now() else black_last_seen end,
            updated_at = now()
@@ -308,7 +324,9 @@ grant execute on function public.pvp_apply_move(
 comment on function public.pvp_apply_move(
   uuid, uuid, text, text, text, text, text, integer
 ) is
-  'Edge 専用着手 commit。棋理は Edge 検証済み。FOR UPDATE + expected_move_count で TOCTOU 防止。';
+  'Edge 専用着手 commit。p_actor は Edge が JWT uid から渡すこと（body の uid 反射禁止）。'
+  '棋理は Edge 検証済み。FOR UPDATE + expected_move_count で TOCTOU 防止。'
+  'finish_reason は checkmate/stalemate/insufficient/threefold/fiftyMove のみ。';
 
 -- ---------------------------------------------------------------------------
 -- 6) pvp_resign / pvp_heartbeat / pvp_record_game
@@ -331,9 +349,11 @@ begin
   end if;
 
   select * into v_room from public.pvp_rooms where id = p_room_id for update;
-  if not found then raise exception 'room not found'; end if;
-  if v_uid is distinct from v_room.white_user_id and v_uid is distinct from v_room.black_user_id then
-    raise exception 'not a participant';
+  -- 不存在と非参加者は同一エラー（部屋存在オラクル防止）
+  if not found
+     or (v_uid is distinct from v_room.white_user_id
+         and v_uid is distinct from v_room.black_user_id) then
+    raise exception 'room not found';
   end if;
   -- 旧権威部屋は verified 昇格経路に乗せない（再マッチして version=1 でやり直す）
   if coalesce(v_room.authority_version, 0) < 1 then
@@ -388,11 +408,12 @@ begin
     raise exception 'rate limited';
   end if;
 
-  -- ロックなしで参加者を先に確認（非 active でも非参加者へ行を返さない）
+  -- ロックなしで参加者を先に確認。不存在と非参加者は同一エラー。
   select * into v_room from public.pvp_rooms where id = p_room_id;
-  if not found then raise exception 'room not found'; end if;
-  if v_uid is distinct from v_room.white_user_id and v_uid is distinct from v_room.black_user_id then
-    raise exception 'not a participant';
+  if not found
+     or (v_uid is distinct from v_room.white_user_id
+         and v_uid is distinct from v_room.black_user_id) then
+    raise exception 'room not found';
   end if;
   if v_room.status is distinct from 'active' then
     return v_room;
