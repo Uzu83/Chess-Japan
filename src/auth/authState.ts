@@ -11,15 +11,23 @@ import type { Profile, RatingSource } from './profile';
 
 export type AuthStatus = 'disabled' | 'anonymous' | 'loading' | 'signedIn';
 
+export type EmailAuthMode = 'signin' | 'signup';
+
 export interface AuthState {
   status: AuthStatus;
   profile: Profile | null;
   /** Google OAuth へリダイレクトする(戻ってくるまでこのページは離脱する)。 */
   signInWithGoogle: () => Promise<void>;
+  /** Apple OAuth へリダイレクト。 */
+  signInWithApple: () => Promise<void>;
+  /** メール+パスワード。signup は確認メール待ちの場合 signedIn にしない。 */
+  signInWithEmailPassword: (email: string, password: string, mode: EmailAuthMode) => Promise<void>;
+  /** マジックリンク / OTP メール送信。 */
+  signInWithEmailOtp: (email: string) => Promise<{ sent: true }>;
   signOut: () => Promise<void>;
   /** オンボーディングの確定。成功時は profile が更新される。 */
   submitInitialRating: (rating: number, source: RatingSource) => Promise<void>;
-  /** 直近の auth 操作エラー(表示用)。 */
+  /** 直近の auth 操作エラー(表示用)。情報メッセージにも流用する場合あり。 */
   error: string | null;
 }
 
@@ -28,6 +36,9 @@ export const disabledState: AuthState = {
   profile: null,
   // disabled で呼ばれることは UI 上あり得ない(ボタンが出ない)が、型のため no-op を置く
   signInWithGoogle: async () => {},
+  signInWithApple: async () => {},
+  signInWithEmailPassword: async () => {},
+  signInWithEmailOtp: async () => ({ sent: true as const }),
   signOut: async () => {},
   submitInitialRating: async () => {},
   error: null,
