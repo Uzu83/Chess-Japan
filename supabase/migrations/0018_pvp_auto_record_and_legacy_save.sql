@@ -205,14 +205,15 @@ begin
     v_opp := v_room.white_user_id;
   end if;
 
+  if v_room.result not in ('1-0', '0-1', '1/2-1/2') then
+    raise exception 'invalid result';
+  end if;
   if v_room.result = '1/2-1/2' then
     v_my_outcome := 'draw';
   elsif v_room.result = '1-0' then
     v_my_outcome := case when v_my_color = 'white' then 'win' else 'loss' end;
-  elsif v_room.result = '0-1' then
-    v_my_outcome := case when v_my_color = 'black' then 'win' else 'loss' end;
   else
-    v_my_outcome := 'unfinished';
+    v_my_outcome := case when v_my_color = 'black' then 'win' else 'loss' end;
   end if;
 
   v_move_count := coalesce(jsonb_array_length(v_room.moves), 0);
@@ -331,10 +332,11 @@ begin
      ))
      and (pr.white_user_id is not null or pr.black_user_id is not null);
 
-  -- 欠落 finished は 180 日で打ち切り（無期限蓄積防止 — Codex cost cycle-52）
+  -- 手数0の欠落 finished のみ 180 日削除（ノイズ）。棋譜あり欠落は残す（Codex data cycle-56）
   delete from public.pvp_rooms
    where status = 'finished'
-     and updated_at < now() - interval '180 days';
+     and updated_at < now() - interval '180 days'
+     and coalesce(jsonb_array_length(moves), 0) = 0;
 end;
 $$;
 
