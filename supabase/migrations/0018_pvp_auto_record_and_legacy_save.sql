@@ -330,6 +330,11 @@ begin
         where g.pvp_room_id = pr.id and g.user_id = pr.black_user_id
      ))
      and (pr.white_user_id is not null or pr.black_user_id is not null);
+
+  -- 欠落 finished は 180 日で打ち切り（無期限蓄積防止 — Codex cost cycle-52）
+  delete from public.pvp_rooms
+   where status = 'finished'
+     and updated_at < now() - interval '180 days';
 end;
 $$;
 
