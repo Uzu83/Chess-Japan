@@ -55,3 +55,6 @@ artifacts/
 
 # UI 監査等の一時スクショ・作業ファイル（セッション tmp 代替として使うことがある）
 scratchpad/
+
+# playwright mcp snapshots (local)
+.playwright-mcp/
