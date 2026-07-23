@@ -8,11 +8,9 @@
 -- G002: ensure（room 行は呼び出し元がロック済みでも可。未ロックならここで取る）
 -- ---------------------------------------------------------------------------
 drop function if exists public.pvp_ensure_verified_records(uuid);
+drop function if exists public.pvp_ensure_verified_records(uuid, boolean);
 
-create or replace function public.pvp_ensure_verified_records(
-  p_room_id uuid,
-  p_relax_daily_quota boolean default false
-)
+create or replace function public.pvp_ensure_verified_records(p_room_id uuid)
 returns void
 language plpgsql
 security definer
@@ -76,14 +74,11 @@ begin
       continue;
     end if;
 
-    -- 終局トリガは日次40を守る。GC バックフィルのみ緩和（権威棋譜の永久欠落防止）
-    if not coalesce(p_relax_daily_quota, false) then
-      select count(*) into v_day from public.games
-       where user_id = v_uid and mode = 'pvp' and trust_level = 'verified'
-         and created_at > now() - interval '1 day';
-      if v_day >= 40 then
-        continue;
-      end if;
+    select count(*) into v_day from public.games
+     where user_id = v_uid and mode = 'pvp' and trust_level = 'verified'
+       and created_at > now() - interval '1 day';
+    if v_day >= 40 then
+      continue;
     end if;
 
     if v_uid = v_room.white_user_id then
@@ -119,13 +114,13 @@ begin
 end;
 $$;
 
-revoke all on function public.pvp_ensure_verified_records(uuid, boolean)
+revoke all on function public.pvp_ensure_verified_records(uuid)
   from public, anon, authenticated;
-grant execute on function public.pvp_ensure_verified_records(uuid, boolean) to service_role;
+grant execute on function public.pvp_ensure_verified_records(uuid) to service_role;
 
-comment on function public.pvp_ensure_verified_records(uuid, boolean) is
-  'finished+authority の両者 verified を冪等保存。room FOR UPDATE→uid advisory。'
-  'p_relax_daily_quota=false（トリガ）: 日次40。true（GC）: バックフィル優先。';
+comment on function public.pvp_ensure_verified_records(uuid) is
+  'finished+authority の両者 verified を冪等保存。room FOR UPDATE→uid advisory。日次40厳守。'
+  '超過時はスキップし room は残す（欠落 finished は GC 削除しない）。';
 
 create or replace function public.pvp_trg_ensure_verified_records()
 returns trigger
@@ -136,7 +131,7 @@ as $$
 begin
   if NEW.status = 'finished'
      and (TG_OP = 'INSERT' or OLD.status is distinct from 'finished') then
-    perform public.pvp_ensure_verified_records(NEW.id, false);
+    perform public.pvp_ensure_verified_records(NEW.id);
   end if;
   return NEW;
 end;
@@ -315,7 +310,7 @@ begin
      order by pr.updated_at asc
      limit 25
   loop
-    perform public.pvp_ensure_verified_records(r.id, true);
+    perform public.pvp_ensure_verified_records(r.id);
   end loop;
 
   delete from public.pvp_rooms
