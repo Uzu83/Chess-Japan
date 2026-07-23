@@ -1,5 +1,7 @@
--- 0016: pvp_record_game に日次保存上限 + verified PvP 保持上限
--- Codex / GPT score loop2 G002（defer→実装）
+-- 0016: pvp_record_game に日次保存上限 + uid 直列化
+-- WHY verified 保持 trim を入れないか（Codex data cycle-37）:
+--   games 行削除後に同じ room を再 record すると別履歴を押し出す。
+--   保持上限は別途 tombstone / アーカイブ設計が要るため日次40のみ。
 -- explain_cache / rate_counters RLS・GRANT、apply_rated_result GRANT には触れない。
 
 create or replace function public.pvp_record_game(p_room_id uuid)
@@ -23,6 +25,9 @@ begin
   if (select email_confirmed_at from auth.users where id = v_uid) is null then
     raise exception 'email not confirmed';
   end if;
+
+  -- 日次 count→insert の並行すり抜け防止（Codex cost cycle-37）
+  perform pg_advisory_xact_lock(hashtext('cj:games:' || v_uid::text));
 
   select * into v_room from public.pvp_rooms where id = p_room_id for update;
   if not found
@@ -83,7 +88,6 @@ begin
     v_room.result, v_my_outcome, v_move_count, v_record, false, p_room_id
   );
 
-  -- unverified AI trim（0015）
   select count(*) into v_n from public.games
    where user_id = v_uid and mode = 'ai' and trust_level = 'unverified';
   if v_n > 200 then
@@ -96,19 +100,6 @@ begin
      );
   end if;
 
-  -- verified PvP 保持上限 300（最古から）
-  select count(*) into v_n from public.games
-   where user_id = v_uid and mode = 'pvp' and trust_level = 'verified';
-  if v_n > 300 then
-    delete from public.games
-     where id in (
-       select id from public.games
-        where user_id = v_uid and mode = 'pvp' and trust_level = 'verified'
-        order by created_at asc
-        limit (v_n - 300)
-     );
-  end if;
-
   return v_room;
 end;
 $$;
@@ -117,4 +108,4 @@ revoke all on function public.pvp_record_game(uuid) from public, anon, authentic
 grant execute on function public.pvp_record_game(uuid) to authenticated;
 
 comment on function public.pvp_record_game(uuid) is
-  'finished room の本人 verified 保存。日次40・保持300。result/record はサーバー生成。';
+  'finished room の本人 verified 保存。日次40・uid 直列化。result/record はサーバー生成。';
