@@ -27,11 +27,27 @@ alter table public.pvp_rooms
     ),
   add column if not exists authority_version integer not null default 0;
 
--- WHY 旧部屋を cutover するか（Codex data cycle-13 F001 / cycle-15 F001 の調停）:
---   旧 RPC を DROP すると authority_version=0 のままでは着手・終局不能で固着する。
---   一方、active を無条件 abort すると進行中対局の終局記録経路まで消える。
---   よって waiting は abort、active はサーバー権威の abandon 引き分けで finished にし、
---   双方が pvp_record_game で本人履歴を残せるようにする（新規は version=1）。
+-- WHY active があるとき適用を拒否し、waiting だけ abort するか:
+--   旧 RPC DROP 後に version=0 active を残すと固着（cycle-13）。
+--   active を version=1 finished にすると未検証 moves が verified 化（cycle-16）。
+--   active を無条件 abort すると進行中対局を破壊（cycle-15/18）。
+--   よって fail-closed: active legacy が残る間は migration 自体を拒否し、
+--   ops が手動 drain してから再適用。waiting（未マッチ）だけ abort する。
+do $$
+declare
+  v_active integer;
+begin
+  select count(*) into v_active
+    from public.pvp_rooms
+   where status = 'active'
+     and coalesce(authority_version, 0) < 1;
+  if v_active > 0 then
+    raise exception
+      '0010 refused: % active legacy pvp_rooms — finish or abort them, then re-apply',
+      v_active;
+  end if;
+end $$;
+
 update public.pvp_rooms
    set status = 'aborted',
        finish_reason = coalesce(finish_reason, 'abandon'),
@@ -39,18 +55,8 @@ update public.pvp_rooms
  where status = 'waiting'
    and coalesce(authority_version, 0) < 1;
 
-update public.pvp_rooms
-   set status = 'finished',
-       result = '1/2-1/2',
-       winner_color = null,
-       finish_reason = 'abandon',
-       authority_version = 1,
-       updated_at = now()
- where status = 'active'
-   and coalesce(authority_version, 0) < 1;
-
 comment on column public.pvp_rooms.authority_version is
-  '0=旧クライアント権威時代（0010 で waiting abort / active は abandon 終局へ昇格）。1+=サーバー権威。';
+  '0=旧クライアント権威。0010 は active=0 を前提に waiting のみ abort。1+=サーバー権威。';
 
 comment on table public.pvp_rooms is
   'カジュアル PvP。着手合法性は Edge+chess.js。終局はサーバー導出。'

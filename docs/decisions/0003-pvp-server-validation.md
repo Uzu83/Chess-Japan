@@ -25,14 +25,14 @@ migration 0010 → 旧 RPC 死活確認 → Edge `pvp` deploy → 新 client →
 
 ## Cutover（0010 適用時の旧部屋）
 
-- `waiting` / `active` + `authority_version<1` → `aborted` + `finish_reason=abandon`
-  （`authority_version` は 0 のまま＝`pvp_record_game` の verified 経路に乗せない）
-- 旧 `finished`（`finish_reason` NULL）も verified 記録対象外のまま
-- トレードオフ: デプロイ瞬間の進行中対局は失効する。未検証 moves を verified に
-  昇格させないことを優先（cycle-16）
+1. **前提**: `status='active' AND authority_version<1` が 0 件であること。
+   1 件でもあれば migration は `0010 refused: …` で失敗（fail-closed）。
+2. ops が手動で active を abort/終了させてから再適用。
+3. 適用成功時: `waiting` + `authority_version<1` → `aborted`（version は 0 のまま）。
+4. 旧 `finished`（`finish_reason` NULL）は verified 記録対象外のまま。
 
 ## Consequences
 
 - 案Aの「双方 result 食い違い」は、サーバー確定の room.result により解消方向。
 - AI戦は引き続き unverified。クラウドレート GRANT はしない。
-- 0010 適用前に active 件数を確認し、可能なら低負荷帯で適用する。
+- 初回まとめて 0007–0010 を入れる環境では active=0 のためガードは実質 no-op。
