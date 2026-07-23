@@ -78,7 +78,12 @@ jobs:
           deno-version: v2.x
       - name: Deno type check (Edge Functions)
         # 単一ファイル固定だと新規 Edge Function を足しても型検査されない(CI-02)。全 index.ts を対象に。
-        run: deno check supabase/functions/*/index.ts
+        # chessPvp が npm:chess.js を使うため、check 前に deno install で node_modules を揃える。
+        working-directory: supabase/functions
+        run: |
+          deno install
+          deno check */index.ts
+
 
   secret-scan:
     runs-on: ubuntu-latest
