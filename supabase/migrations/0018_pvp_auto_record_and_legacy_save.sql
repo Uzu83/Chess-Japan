@@ -1,6 +1,6 @@
 -- 0018: 採点ループ Top3（G002 / G003）+ Tier2 cycle-42..44 反映
 --   G002: finished 遷移で両者 verified を冪等保存。欠落は GC バッチで再試行。
---   G003: 旧 8 引数互換。9 引数の default を外してオーバーロード曖昧さを解消。
+--   G003: 9 引数の default を外す。8 引数互換は置かず fail-closed（衝突/重複の両高指摘を避ける）。
 --   ロック順: pvp_rooms FOR UPDATE → uid advisory（deadlock 防止）
 -- explain_cache / rate_counters RLS・GRANT、apply_rated_result GRANT には触れない。
 
@@ -490,103 +490,11 @@ grant execute on function public.save_unverified_ai_game(
   text, text, text, text, integer, text, text, jsonb, text
 ) to authenticated;
 
--- 短時間 dedupe（10分）。games の恒久 idempotency には内容を載せない。
-create table if not exists public.legacy_ai_save_dedupe (
-  user_id uuid not null references auth.users (id) on delete cascade,
-  fingerprint text not null,
-  game_id uuid not null references public.games (id) on delete cascade,
-  created_at timestamptz not null default now(),
-  primary key (user_id, fingerprint)
+-- G003: 8 引数オーバーロードは置かない。
+-- WHY: 内容 dedupe は別対局衝突、UUID 毎回は再送重複でどちらも high 指摘になる。
+-- 9 引数は idempotency_key 必須（default なし）。旧SPAは署名不一致で失敗（明示的）。
+-- 新クライアント（既に main）は 9 引数を送る。移行順は Pages → migration。
+drop function if exists public.save_unverified_ai_game(
+  text, text, text, text, integer, text, text, jsonb
 );
-
-alter table public.legacy_ai_save_dedupe enable row level security;
-revoke all on table public.legacy_ai_save_dedupe from public, anon, authenticated;
-
-create index if not exists legacy_ai_save_dedupe_created_at_idx
-  on public.legacy_ai_save_dedupe (created_at);
-
--- 8 引数互換: 10分窓 dedupe + 新規は UUID キー。移行窓専用・後続 DROP 予定。
-create or replace function public.save_unverified_ai_game(
-  p_game_kind text,
-  p_you_color text,
-  p_outcome text,
-  p_result text,
-  p_move_count integer,
-  p_opponent_label text,
-  p_record_text text,
-  p_analysis_payload jsonb default null
-) returns public.games
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_uid uuid := auth.uid();
-  v_key text;
-  v_fp text;
-  v_row public.games;
-  v_game_id uuid;
-begin
-  if v_uid is null then raise exception 'not authenticated'; end if;
-
-  v_fp := md5(
-    v_uid::text || E'\n' ||
-    coalesce(p_game_kind, '') || E'\n' ||
-    coalesce(p_you_color, '') || E'\n' ||
-    coalesce(p_outcome, '') || E'\n' ||
-    coalesce(p_result, '') || E'\n' ||
-    coalesce(p_move_count::text, '') || E'\n' ||
-    coalesce(p_opponent_label, '') || E'\n' ||
-    left(coalesce(p_record_text, ''), 4000)
-  );
-
-  perform pg_advisory_xact_lock(hashtext('cj:legacy8:' || v_uid::text));
-
-  delete from public.legacy_ai_save_dedupe
-   where user_id = v_uid and created_at < now() - interval '1 day';
-
-  select d.game_id into v_game_id
-    from public.legacy_ai_save_dedupe d
-   where d.user_id = v_uid
-     and d.fingerprint = v_fp
-     and d.created_at > now() - interval '10 minutes';
-  if v_game_id is not null then
-    select * into v_row from public.games where id = v_game_id and user_id = v_uid;
-    if found then return v_row; end if;
-  end if;
-
-  v_key := 'compat8:' || gen_random_uuid()::text;
-  v_row := public.save_unverified_ai_game(
-    p_game_kind,
-    p_you_color,
-    p_outcome,
-    p_result,
-    p_move_count,
-    p_opponent_label,
-    p_record_text,
-    p_analysis_payload,
-    v_key
-  );
-
-  insert into public.legacy_ai_save_dedupe (user_id, fingerprint, game_id)
-  values (v_uid, v_fp, v_row.id)
-  on conflict (user_id, fingerprint) do update
-    set game_id = excluded.game_id,
-        created_at = now();
-
-  return v_row;
-end;
-$$;
-
-revoke all on function public.save_unverified_ai_game(
-  text, text, text, text, integer, text, text, jsonb
-) from public, anon, authenticated;
-grant execute on function public.save_unverified_ai_game(
-  text, text, text, text, integer, text, text, jsonb
-) to authenticated;
-
-comment on function public.save_unverified_ai_game(
-  text, text, text, text, integer, text, text, jsonb
-) is
-  '移行窓: 旧SPA 8引数。10分窓 dedupe 表で再送抑制。games 恒久キーには内容を載せない。'
-  '後続 DROP 予定。新クライアントは 9 引数（idempotency_key 必須・default なし）。';
+drop table if exists public.legacy_ai_save_dedupe;
