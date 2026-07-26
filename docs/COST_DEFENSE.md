@@ -7,7 +7,8 @@
 
 ## 脅威モデル（何から守るのか）
 
-- 収益モデルは課金なし（Ko-fi の任意支援＋将来広告）。サーバー計算はブラウザ WASM で実質ゼロ。
+- 収益モデルは **Ko-fi（任意支援）→ Stripe サブスク（次）→ AdSense 後回し**
+  （`docs/decisions/0005-monetization-kofi-stripe-adsense.md`）。サーバー計算はブラウザ WASM で実質ゼロ。
 - **唯一お金が出ていくのは LLM API のみ**。だから攻撃面はただ1つ ——「解説 Edge Function を大量・自動で叩かれること」。
 - ブラウザに焼かれる **anon key で Edge Function は誰でも直叩きできる**前提（公開 SPA なので隠せない）。
   → **信頼境界はブラウザではなくサーバー（Edge Function）**。フロントの検証は親切表示用で、防壁ではない。

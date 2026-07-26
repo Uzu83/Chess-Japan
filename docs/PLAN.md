@@ -205,12 +205,16 @@ PoC で**作らない**もの（後続フェーズ）: 将棋対応・AI対局/�
 - **セキュリティヘッダ**: COOP/COEP（WASM用）＋ CSP・`X-Content-Type-Options`・Referrer-Policy。CSP は広告導入時に許可ドメインを最小限追加。
 - **依存最小化**: WASM/盤ライブラリは実績ある公式系のみ採用。
 
-## 収益・コスト方針（課金なし）
-- **課金要素は実装しない**。サーバ計算はブラウザ WASM 採用で実質ゼロに抑える。
-- **Ko-fi**: 外部リンク設置のみ（決済連携・PII 取得不要、実装軽量）。
-- **フィードバック導線**: アプリ内に「フィードバック」ボタン → 当面は **Google フォーム**（外部リンク）。実装軽量・PII最小。フォームの作成要件と Gemini 生成プロンプトは `docs/feedback-form.md` に用意（ユーザーが作成しリンクを環境変数 `VITE_FEEDBACK_URL` に設定）。
-- **広告（将来）**: Google AdSense 等。導入時の課題＝**COEP との両立**（`credentialless` 採用 or エンジン隔離）と CSP/同意管理（個人情報・GDPR/改正個情法）。Phase 6 で対応。
-- 主要コスト＝LLM のみ → キャッシュ＋最安プロバイダ＋レート制限で最小化し、Ko-fi/広告で回収。
+## 収益・コスト方針（2026-07-26 更新）
+
+順番の正: [`docs/decisions/0005-monetization-kofi-stripe-adsense.md`](decisions/0005-monetization-kofi-stripe-adsense.md) /
+運用: [`docs/operator/monetization-runbook.md`](operator/monetization-runbook.md)
+
+- **1. Ko-fi（いま）**: 外部リンクのみ（`VITE_KOFI_URL`）。決済連携・PII 不要。UI はヘッダー「支援する」。
+- **2. Stripe サブスク（次）**: 有料プランで Pro 解説枠。モデルはサーバー側のみ決定。課金キーは手動承認。未実装。
+- **3. AdSense（後回し）**: 月間数千 PV まで入れない。COEP 両立・CSP・同意管理が前提。入れるならフッター1枠のみ。
+- **フィードバック導線**: アプリ内ダイアログ（Edge `feedback`）＋ Form フォールバック（`VITE_FEEDBACK_URL`）。
+- 主要コスト＝LLM のみ → キャッシュ＋最安プロバイダ＋レート制限で最小化し、Ko-fi →（将来）Stripe で回収。
 
 ## 環境変数の設定（スマホ/リモート前提）
 `.env` ファイルは git に入れず（gitignore 済み）、本番値は各 Web ダッシュボードで設定する（スマホブラウザで可）。
