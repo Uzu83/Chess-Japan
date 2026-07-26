@@ -90,5 +90,6 @@ Sentry 側で Allowed Domains を必ず絞ること（`.env.example` の運用�
 
 ## 収益・コスト方針
 
-課金要素なし。サーバ計算はブラウザ WASM で実質ゼロ。LLM コストはキャッシュ＋最安プロバイダ
-＋レート制限で最小化し、Ko-fi 支援・将来の広告でサーバ代を賄います。
+サーバ計算はブラウザ WASM で実質ゼロ。LLM コストはキャッシュ＋最安プロバイダ＋レート制限で最小化。
+収益は **Ko-fi（任意支援）→ Stripe サブスク → AdSense は後回し**
+（[`docs/decisions/0005-monetization-kofi-stripe-adsense.md`](docs/decisions/0005-monetization-kofi-stripe-adsense.md)）。

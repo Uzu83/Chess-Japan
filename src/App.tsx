@@ -18,7 +18,11 @@ import {
   isFeedbackBackendConfigured,
 } from './feedback/client';
 
-const KOFI_URL = import.meta.env.VITE_KOFI_URL as string | undefined;
+// 未設定時のフォールバック: オーナー確定の公開ページ（2026-07-27）。
+// 本番は Cloudflare Pages の VITE_KOFI_URL でも上書き可（ビルド時焼込み）。
+const KOFI_URL =
+  (import.meta.env.VITE_KOFI_URL as string | undefined)?.trim() ||
+  'https://ko-fi.com/uz_u83';
 const pvpEnabled = import.meta.env.VITE_PVP_ENABLED === '1' && isAuthConfigured();
 
 /** アプリのモード。対局(AI戦) / レビュー / プレイ分析 / 対人戦。 */
