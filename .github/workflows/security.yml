@@ -57,8 +57,8 @@ jobs:
   # このリポジトリは Vite+React SPA + Deno Edge Functions で JS/TS のみなので
   # javascript-typescript 単独。対象パスは .github/codeql/codeql-config.yml 側で
   # src / supabase/functions に絞ってある（生成物スキャン防止）。
-  # クエリスイートは security-and-quality（既定+品質）。security-extended は
-  # 誤検知が増える方向なので、auth/決済など危険領域を持つ repo だけで検討。
+  # クエリスイート: security-and-quality + security-extended
+  # （Stripe/auth があるため extended を有効化。設定は codeql-config.yml）。
   # --------------------------------------------------------------------------
   codeql:
     runs-on: ubuntu-latest

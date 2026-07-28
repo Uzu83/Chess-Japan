@@ -1,12 +1,11 @@
 # CodeQL 設定（/dev-secure scope:security が .github/codeql/ に配置）
 #
-# security-and-quality = 既定のセキュリティクエリ + 品質クエリ。
-# security-extended へ広げるのは auth/決済を持つ repo だけにする
-# （extended は精度がわずかに下がり誤検知が増える方向のため、
-#   ノイズ耐性のない 1 人開発では既定+品質が損益分岐点）。
+# auth + Stripe 課金レーンがあるため security-extended を併用（2026-07 GHAS 見直し）。
+# security-and-quality = 既定セキュリティ + 品質。extended = 追加セキュリティクエリ。
 name: 'repo-codeql'
 queries:
   - uses: security-and-quality
+  - uses: security-extended
 # 一次ソースだけを対象にする（テンプレは paths-ignore のみだが、このリポジトリは
 # 自作コードの置き場が src/（Vite+React SPA）と supabase/functions/（Deno Edge
 # Functions）の 2 箇所に確定しているため、paths で正面から絞る方が確実）。

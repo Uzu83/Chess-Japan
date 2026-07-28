@@ -546,6 +546,8 @@ export function ReviewView({
   const handleAnalyzeAll = useCallback(async () => {
     const engine = engineRef.current;
     if (!model || !engine || isAnalyzingAllRef.current) return;
+    // CodeQL js/trivial-conditional: ここ以降 model は非 null。内側の `&& model` は常に true。
+    const gameKind = model.kind;
 
     isAnalyzingAllRef.current = true;
     // 自分のトークンを取得(以降 bulkTokenRef が変われば中断)
@@ -607,7 +609,7 @@ export function ReviewView({
     if (bulkTokenRef.current === myToken) {
       setAnalyzeAllProgress(null);
       // ログイン済みなら、同一棋譜の自己用クラウド局へ解析を best-effort 添付（F001: unverified）
-      if (isAuthConfigured() && loadedPgn && model) {
+      if (isAuthConfigured() && loadedPgn) {
         const snapshot = { ...contextsRef.current };
         // 直前 setContexts を反映させるため次タスクで読む
         void (async () => {
@@ -621,14 +623,14 @@ export function ReviewView({
             const match = games.find(
               (g) =>
                 g.record_text === loadedPgn &&
-                g.game_kind === model.kind &&
+                g.game_kind === gameKind &&
                 g.you_color === youColorForMatch,
             );
             // 0008: attach は一度だけ。既添付なら再送しない（cost-F002 / ノイズ警告回避）
             if (!match || match.trust_level !== 'unverified' || match.analysis_payload != null)
               return;
             const payload = buildAnalysisPayload({
-              kind: model.kind,
+              kind: gameKind,
               youColor: match.you_color,
               contexts: merged,
               moves: moveRecords,
