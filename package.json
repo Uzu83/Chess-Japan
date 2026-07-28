@@ -28,7 +28,7 @@
   "dependencies": {
     "@mizarjp/yaneuraou.k-p": "7.6.3-alpha.0",
     "@sentry/react": "10.66.0",
-    "@supabase/supabase-js": "2.110.2",
+    "@supabase/supabase-js": "2.110.8",
     "chess.js": "^1.4.0",
     "chessground": "^9.2.1",
     "react": "^19.1.1",
