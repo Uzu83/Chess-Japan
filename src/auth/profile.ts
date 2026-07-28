@@ -21,7 +21,7 @@ export const RATING_SOURCES = [
 ] as const;
 export type RatingSource = (typeof RATING_SOURCES)[number];
 
-/** profiles 1 行(0004 + 0006 の列定義と一致)。 */
+/** profiles 1 行(0004 + 0006 + 0020 の列定義と一致)。 */
 export interface Profile {
   id: string;
   display_name: string | null;
@@ -33,6 +33,11 @@ export interface Profile {
   strength_visibility?: 'private' | 'public';
   /** 0006: 公開ハンドル。非公開時は null。 */
   public_handle?: string | null;
+  /** 0020: free|pro。webhook のみが書く。 */
+  plan?: 'free' | 'pro';
+  stripe_customer_id?: string | null;
+  stripe_subscription_id?: string | null;
+  stripe_status?: 'none' | 'active' | 'past_due' | 'canceled';
   created_at: string;
   updated_at: string;
 }
@@ -41,10 +46,18 @@ export interface Profile {
 export function normalizeProfile(row: Record<string, unknown> | null): Profile | null {
   if (!row || typeof row.id !== 'string') return null;
   const vis = row.strength_visibility;
+  const plan = row.plan === 'pro' ? 'pro' : 'free';
+  const st = row.stripe_status;
+  const stripe_status = st === 'active' || st === 'past_due' || st === 'canceled' ? st : 'none';
   return {
     ...(row as unknown as Profile),
     strength_visibility: vis === 'public' ? 'public' : 'private',
     public_handle: typeof row.public_handle === 'string' ? row.public_handle : null,
+    plan,
+    stripe_customer_id: typeof row.stripe_customer_id === 'string' ? row.stripe_customer_id : null,
+    stripe_subscription_id:
+      typeof row.stripe_subscription_id === 'string' ? row.stripe_subscription_id : null,
+    stripe_status,
   };
 }
 

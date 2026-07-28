@@ -31,6 +31,8 @@ export function byteLengthOf(str: string): number {
 }
 
 export type Mode = 'explain' | 'followup';
+/** 解説の深さ。model 名はクライアントが送れないので depth でサーバーが Flash/Pro を解決（ADR 0005）。 */
+export type Depth = 'standard' | 'deep';
 export type GameKind = 'chess' | 'shogi';
 export type MoveQuality = 'best' | 'good' | 'inaccuracy' | 'mistake' | 'blunder';
 export type Level = 'beginner' | 'intermediate' | 'advanced';
@@ -73,6 +75,8 @@ export interface ExplainBody {
   question?: string;
   history?: { role: 'user' | 'assistant'; content: string }[];
   profile?: KnowledgeProfile;
+  /** 省略時 standard。deep は Pro かつ月次枠があるときだけ高品質モデルへ。 */
+  depth?: Depth;
 }
 
 // ---- 各種上限（マジックナンバーの根拠をコメントで固定。緩めると攻撃面/コストが増える） ----
@@ -167,6 +171,12 @@ export function validateExplainBody(input: unknown): ValidationResult {
   if (b.game !== 'chess' && b.game !== 'shogi') return { ok: false, error: 'invalid game' };
   const mode = b.mode as Mode;
   const game = b.game as GameKind;
+
+  let depth: Depth = 'standard';
+  if (b.depth !== undefined) {
+    if (b.depth !== 'standard' && b.depth !== 'deep') return { ok: false, error: 'invalid depth' };
+    depth = b.depth;
+  }
 
   // context は必須。最低限 fenOrSfen が要る（盤面が無いと解説のしようがない）。
   if (typeof b.context !== 'object' || b.context === null)
@@ -299,7 +309,7 @@ export function validateExplainBody(input: unknown): ValidationResult {
     profile = { known, unknown, level: p.level as Level | undefined };
   }
 
-  return { ok: true, value: { mode, game, context, question, history, profile } };
+  return { ok: true, value: { mode, game, context, question, history, profile, depth } };
 }
 
 /**
@@ -325,6 +335,7 @@ export function cacheKeyInput(body: ExplainBody): Record<string, unknown> {
   const unknown = [...(body.profile?.unknown ?? [])].sort();
   return {
     game: body.game,
+    depth: body.depth ?? 'standard',
     context: normalizeContext(body.context),
     known,
     unknown,
