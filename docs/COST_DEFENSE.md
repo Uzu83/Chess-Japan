@@ -24,7 +24,7 @@
 | 1 | **CORS / Origin** | ブラウザ経由の他サイト埋め込み（補助） | `resolveCors`。本番は `ALLOWED_ORIGINS` 必須。未設定なら安全側で全拒否 |
 | 2 | **Turnstile** | bot による自動濫用（最有効・有効化時のみ） | `verifyTurnstile`。`TURNSTILE_SECRET` 未設定ならスキップ＝キー入手後に有効化 |
 | 3 | **レート制限（分）** | バースト連打 | `rateCheck('min:ip:<ip>', RATE_PER_MIN=15, 60)` → `rate_check` RPC |
-| 4 | **日次クォータ** | 1IP からの1日総量 | `rateCheck('day:ip:<ip>', RATE_PER_DAY=200, 86400)` |
+| 4 | **日次クォータ** | 1IP からの1日総量 | `rateCheck('day:ip:<ip>', RATE_PER_DAY=50, 86400)`（決定値。Pro は uid 別枠） |
 | 5 | **body サイズ上限** | 巨大 PGN/JSON でトークン爆撃 | `MAX_BODY_BYTES=16KB`。Content-Length 先行＋ストリーム実測（偽装に強い） |
 | 6 | **厳格入力検証** | 型/列挙/長さ/範囲外・制御文字・末尾バイパス | `validateExplainBody`（`_shared/validate.ts`、vitest 済み） |
 | 7 | **解説キャッシュ** | 同一局面の再課金（コスト核） | explain のみ。局面+level ハッシュで `explain_cache` を lookup→hit なら LLM を呼ばない |
@@ -33,7 +33,7 @@
 ### マジックナンバーの根拠（勝手に緩めない）
 
 - `RATE_PER_MIN=15`: 1局を数十手レビューしても足りる。これ以上は連打＝濫用とみなす。
-- `RATE_PER_DAY=200`: 1IP で数局分。超過は自動濫用とみなす。
+- `RATE_PER_DAY=50`: 匿名 IP の日次上限（オーナー決定 2026-07）。超過は自動濫用とみなす。Pro は `day:pro:flash:<uid>` / deep 月次枠。
 - `MAX_BODY_BYTES=16KB`: 正当な1手分のコンテキスト（局面＋PV＋語彙）には十分大きく、巨大 PGN 攻撃には十分小さい。
 - `max_tokens=500`: 1手の自然言語解説には十分。**ここを上げると1回の課金上限が直接上がる**。
 

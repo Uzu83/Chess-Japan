@@ -17,6 +17,7 @@ import {
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+const EXPECTED_PRICE_ID = (Deno.env.get('STRIPE_PRICE_ID') ?? '').trim();
 
 Deno.serve(async (req) => {
   if (req.method !== 'POST') {
@@ -68,7 +69,7 @@ Deno.serve(async (req) => {
     await handleEvent(event.type, event.data.object);
   } catch (e) {
     console.error('webhook handler error', e instanceof Error ? e.message : 'error');
-    // 失敗時は claim を残すと再試行不能になるため削除して 500（Stripe が再送）
+    // 失敗時は claim を残すと再試行不能 → 削除して 500（Stripe が再送）
     await releaseWebhookEvent(event.id);
     return new Response(JSON.stringify({ error: 'handler failed' }), { status: 500 });
   }
@@ -92,8 +93,7 @@ async function claimWebhookEvent(
       },
       body: JSON.stringify({ event_id: eventId, event_type: eventType.slice(0, 128) }),
     });
-    if (res.status === 409 || res.status === 23505) return 'duplicate';
-    // PostgREST unique violation → 409
+    if (res.status === 409) return 'duplicate';
     if (!res.ok) {
       const text = await res.text();
       if (text.includes('duplicate') || text.includes('23505')) return 'duplicate';
@@ -124,36 +124,64 @@ async function releaseWebhookEvent(eventId: string): Promise<void> {
   }
 }
 
+async function requirePatch(
+  userId: string,
+  patch: Parameters<typeof patchProfileBilling>[3],
+): Promise<void> {
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) throw new Error('store unavailable');
+  const ok = await patchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, userId, patch);
+  if (!ok) throw new Error(`profile patch failed for ${userId.slice(0, 8)}`);
+}
+
 async function handleEvent(type: string, obj: Record<string, unknown>): Promise<void> {
-  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) return;
+  if (!SUPABASE_URL || !SERVICE_ROLE_KEY) throw new Error('store unavailable');
 
   if (type === 'checkout.session.completed') {
+    // 未払い・非 subscription では entitlement を上げない（コスト防衛）。
+    if (obj.mode !== 'subscription') {
+      console.error('checkout.session.completed ignored: mode!=subscription');
+      return;
+    }
+    const paymentStatus = obj.payment_status;
+    if (paymentStatus !== 'paid' && paymentStatus !== 'no_payment_required') {
+      console.error('checkout.session.completed ignored: unpaid');
+      return;
+    }
     const userIdRaw =
       (typeof obj.client_reference_id === 'string' && obj.client_reference_id) ||
       metaUserId(obj.metadata);
     const customerId = typeof obj.customer === 'string' ? obj.customer : null;
     const subId = typeof obj.subscription === 'string' ? obj.subscription : null;
     if (!userIdRaw || !isSupabaseUserId(userIdRaw)) {
-      console.error('checkout.session.completed missing/invalid user id');
-      return;
+      throw new Error('checkout.session.completed missing/invalid user id');
     }
-    if (customerId && !isStripeCustomerId(customerId)) {
-      console.error('checkout.session.completed invalid customer id');
-      return;
+    if (!customerId || !isStripeCustomerId(customerId)) {
+      throw new Error('checkout.session.completed missing/invalid customer');
+    }
+    if (!subId || typeof subId !== 'string') {
+      throw new Error('checkout.session.completed missing subscription');
+    }
+    if (EXPECTED_PRICE_ID.startsWith('price_')) {
+      // line_items は expand しないと無いことがある。metadata / 単一 Price 運用で緩和。
+      const lineItems = obj.line_items as
+        { data?: { price?: { id?: string } | string }[] } | undefined;
+      const first = lineItems?.data?.[0]?.price;
+      const priceId = typeof first === 'string' ? first : first?.id;
+      if (priceId && priceId !== EXPECTED_PRICE_ID) {
+        throw new Error('checkout.session.completed unexpected price');
+      }
     }
 
-    // A01: 既存 customer と不一致なら拒否（他人への entitlement 付け替え防止）
     const existing = await fetchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, userIdRaw);
-    if (existing?.stripe_customer_id && customerId && existing.stripe_customer_id !== customerId) {
-      console.error('checkout.session.completed customer mismatch');
-      return;
+    if (existing?.stripe_customer_id && existing.stripe_customer_id !== customerId) {
+      throw new Error('checkout.session.completed customer mismatch');
     }
 
-    await patchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, userIdRaw, {
+    await requirePatch(userIdRaw, {
       plan: 'pro',
       stripe_status: 'active',
-      ...(customerId ? { stripe_customer_id: customerId } : {}),
-      ...(subId ? { stripe_subscription_id: subId } : {}),
+      stripe_customer_id: customerId,
+      stripe_subscription_id: subId,
     });
     return;
   }
@@ -165,23 +193,36 @@ async function handleEvent(type: string, obj: Record<string, unknown>): Promise<
   ) {
     const customerId =
       typeof obj.customer === 'string' && isStripeCustomerId(obj.customer) ? obj.customer : null;
+    if (!customerId) {
+      throw new Error(`${type}: missing/invalid customer`);
+    }
 
-    let userId = metaUserId(obj.metadata);
-    if (userId && !isSupabaseUserId(userId)) userId = null;
+    // A01: customer を正とする。metadata uid がある場合は同一 profile であることを要求。
+    const byCustomer = await fetchProfileByCustomerId(SUPABASE_URL, SERVICE_ROLE_KEY, customerId);
+    const metaUid = metaUserId(obj.metadata);
+    const metaOk = metaUid && isSupabaseUserId(metaUid) ? metaUid : null;
+    if (metaOk) {
+      const byMeta = await fetchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, metaOk);
+      if (byMeta && byCustomer && byMeta.id !== byCustomer.id) {
+        throw new Error(`${type}: metadata/customer profile mismatch`);
+      }
+      if (byMeta?.stripe_customer_id && byMeta.stripe_customer_id !== customerId) {
+        throw new Error(`${type}: metadata profile customer mismatch`);
+      }
+    }
 
     const profile =
-      (userId ? await fetchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, userId) : null) ??
-      (customerId
-        ? await fetchProfileByCustomerId(SUPABASE_URL, SERVICE_ROLE_KEY, customerId)
-        : null);
+      byCustomer ??
+      (metaOk ? await fetchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, metaOk) : null);
     if (!profile) {
+      // 未知 customer は再試行しても増えない → ログして ack（throw しない）
       console.error(`${type}: profile not found`);
       return;
     }
-    userId = profile.id;
+    const userId = profile.id;
 
     if (type === 'customer.subscription.deleted') {
-      await patchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, userId, {
+      await requirePatch(userId, {
         plan: 'free',
         stripe_status: 'canceled',
         stripe_subscription_id: null,
@@ -190,7 +231,8 @@ async function handleEvent(type: string, obj: Record<string, unknown>): Promise<
     }
 
     if (type === 'invoice.payment_failed') {
-      await patchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, userId, {
+      await requirePatch(userId, {
+        plan: 'free',
         stripe_status: 'past_due',
       });
       return;
@@ -198,19 +240,21 @@ async function handleEvent(type: string, obj: Record<string, unknown>): Promise<
 
     const status = mapSubStatus(obj.status);
     const subId = typeof obj.id === 'string' ? obj.id : profile.stripe_subscription_id;
-    if (status === 'canceled') {
-      await patchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, userId, {
+    if (status === 'canceled' || status === 'past_due' || status === 'none') {
+      await requirePatch(userId, {
         plan: 'free',
-        stripe_status: 'canceled',
-        stripe_subscription_id: null,
+        stripe_status: status === 'none' ? 'past_due' : status,
+        ...(status === 'canceled' ? { stripe_subscription_id: null } : {}),
+        stripe_customer_id: customerId,
       });
       return;
     }
-    await patchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, userId, {
-      plan: status === 'active' ? 'pro' : 'free',
-      stripe_status: status,
+    // active / trialing
+    await requirePatch(userId, {
+      plan: 'pro',
+      stripe_status: 'active',
       ...(subId ? { stripe_subscription_id: subId } : {}),
-      ...(customerId ? { stripe_customer_id: customerId } : {}),
+      stripe_customer_id: customerId,
     });
   }
 }

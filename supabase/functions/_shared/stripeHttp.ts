@@ -100,8 +100,9 @@ export async function verifyStripeWebhook(
   if (Math.abs(now - ts) > toleranceSec) throw new Error('timestamp outside tolerance');
 
   const signedPayload = `${timestamp}.${rawBody}`;
-  const keyBytes = decodeWhsec(endpointSecret);
-  const keyCopy = new Uint8Array(keyBytes); // BufferSource 互換（SharedArrayBuffer 回避）
+  // Stripe 公式（stripe-node / docs 手動検証）: HMAC 鍵は whsec_ 付き文字列そのもの（UTF-8）。
+  // base64 デコードしない（誤ると正当な webhook が全部落ちる）。
+  const keyCopy = new TextEncoder().encode(endpointSecret);
   const mac = await crypto.subtle.importKey(
     'raw',
     keyCopy,
@@ -120,15 +121,6 @@ export async function verifyStripeWebhook(
   };
   if (!event.type || !event.data?.object || !event.id) throw new Error('invalid event payload');
   return { id: event.id, type: event.type, data: { object: event.data.object } };
-}
-
-function decodeWhsec(secret: string): Uint8Array {
-  // whsec_ の後は base64。
-  const b64 = secret.slice('whsec_'.length);
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
 }
 
 function timingSafeEqualHex(a: string, b: string): boolean {
