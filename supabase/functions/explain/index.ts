@@ -499,7 +499,9 @@ Deno.serve(async (req: Request) => {
       await cachePut(cacheKey, body.game, body.profile?.level ?? 'beginner', text, provider);
     return new Response(JSON.stringify({ text, provider }), { headers });
   } catch (err) {
-    return new Response(JSON.stringify({ error: String((err as any)?.message ?? err) }), {
+    // OWASP A09 / CodeQL js/stack-trace-exposure: クライアントへ message/stack を返さない。
+    console.error('provider call failed', err instanceof Error ? err.name : 'error');
+    return new Response(JSON.stringify({ error: 'upstream failed' }), {
       status: 502,
       headers,
     });
