@@ -20,6 +20,9 @@ import {
   type PlayedGame,
   type RatingData,
 } from '../core/storage';
+import { useAuth } from '../auth/authState';
+import { syncAiGameToCloud } from '../auth/cloudSync';
+import { notifyCloudSyncFailureOnce } from '../auth/cloudSyncNotify';
 
 /*
  * ShogiPlaySession — 将棋 AI 対局の自己完結状態機械（React.lazy 到達専用）
@@ -151,6 +154,7 @@ interface ShogiPlaySessionProps {
  * default export は React.lazy から読むため。
  */
 export default function ShogiPlaySession({ onReview, playFrom }: ShogiPlaySessionProps) {
+  const { status: authStatus } = useAuth();
   // ── エンジン ────────────────────────────────────────────────
   const engineRef = useRef<ChessEngine | null>(null);
   // 'loading' 初期・'unsupported'(coi=false) は create せず即確定。
@@ -426,9 +430,24 @@ export default function ShogiPlaySession({ onReview, playFrom }: ShogiPlaySessio
         game: 'shogi', // ← このタグでチェス履歴と分離
       };
       setHistory(savePlayedGame(played).filter((g) => playedGameKind(g) === 'shogi'));
+      void (async () => {
+        const sync = await syncAiGameToCloud({
+          signedIn: authStatus === 'signedIn',
+          gameKind: 'shogi',
+          youColor: played.youColor,
+          outcome: humanOutcome,
+          result: played.result,
+          moveCount: played.moveCount,
+          opponentLabel: opponent,
+          recordText: kif,
+          idempotencyKey: played.id,
+        });
+        if (!sync.ok) notifyCloudSyncFailureOnce(sync.reason);
+      })();
     }
 
     // レート更新（レート戦のみ・待った未使用のみ・将棋専用枠へ保存）。
+    // クラウド Elo は ADR 0002 により未配線。
     if (activeRatedRef.current && !usedTakebackRef.current) {
       const score: GameScore = humanOutcome === 'win' ? 1 : humanOutcome === 'draw' ? 0.5 : 0;
       const oppElo = activeDifficultyRef.current.elo;
@@ -440,7 +459,7 @@ export default function ShogiPlaySession({ onReview, playFrom }: ShogiPlaySessio
         return next;
       });
     }
-  }, [snap, youColor]);
+  }, [snap, youColor, authStatus]);
 
   // ── 派生値 ──────────────────────────────────────────────────
   const isOver = snap?.outcome.over ?? false;

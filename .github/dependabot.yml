@@ -5,9 +5,16 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # WHY groups を minor/patch に限定するか（#30 再発防止）:
+    #   dependency-type: development だけでまとめると、ESLint 10 / TypeScript 7 /
+    #   jsdom 29 のようなメジャーが1本の PR に寄って peer 衝突で CI が真っ赤になる。
+    #   メジャーは個別 PR のまま残し、設定追随・typescript-eslint との整合を別途見る。
     groups:
       dev-dependencies:
         dependency-type: development
+        update-types:
+          - 'minor'
+          - 'patch'
   - package-ecosystem: github-actions
     directory: /
     schedule:

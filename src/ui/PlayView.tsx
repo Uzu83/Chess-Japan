@@ -21,6 +21,9 @@ import {
   type PlayedGame,
   type RatingData,
 } from '../core/storage';
+import { useAuth } from '../auth/authState';
+import { syncAiGameToCloud } from '../auth/cloudSync';
+import { notifyCloudSyncFailureOnce } from '../auth/cloudSyncNotify';
 import { PlayBoard } from './PlayBoard';
 
 /*
@@ -167,6 +170,9 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
     if (k === 'shogi') setShogiMounted(true);
     setKind(k);
   }, []);
+
+  // クラウド自己履歴用（auth 無効時は status=disabled → sync は no-op）
+  const { status: authStatus } = useAuth();
 
   // ── エンジン ────────────────────────────────────────────────
   const engineRef = useRef<ChessEngine | null>(null);
@@ -443,6 +449,21 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
         game: 'chess', // チェスの対局であることを明示（将棋履歴と分離するタグ）
       };
       setHistory(savePlayedGame(played).filter((g) => playedGameKind(g) === 'chess'));
+      // 自己用クラウド履歴（unverified）。失敗しても localStorage は残る。
+      void (async () => {
+        const sync = await syncAiGameToCloud({
+          signedIn: authStatus === 'signedIn',
+          gameKind: 'chess',
+          youColor,
+          outcome: humanOutcome,
+          result: played.result,
+          moveCount: played.moveCount,
+          opponentLabel: opponent,
+          recordText: pgn,
+          idempotencyKey: played.id,
+        });
+        if (!sync.ok) notifyCloudSyncFailureOnce(sync.reason);
+      })();
     }
 
     /*
@@ -450,6 +471,7 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
      * 待った使用時は降格(usedTakebackRef)。相手レート = 難易度の目安 Elo。
      * WHY 0手投了もカウントするか: レート戦を建てて即投了は Elo 上「負け」が正しい
      * (逃げ得を許すとレートが実力とズレる)。カジュアルで気軽に試せるので不便はない。
+     * クラウド Elo（apply_rated_result）は ADR 0002 により未配線。
      */
     if (activeRatedRef.current && !usedTakebackRef.current) {
       const score: GameScore = humanOutcome === 'win' ? 1 : humanOutcome === 'draw' ? 0.5 : 0;
@@ -462,7 +484,7 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
         return next;
       });
     }
-  }, [snap, youColor]);
+  }, [snap, youColor, authStatus]);
 
   // ── レビュー局面からの対局開始(Phase 2B: チェス / Phase 4-3: 将棋) ──
   /*

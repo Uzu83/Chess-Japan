@@ -9,6 +9,9 @@
 ```text
 /review-post
 base_ref: main
+
+/quality-gate
+classify
 ```
 
 ## セキュリティ注意（必読）

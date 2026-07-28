@@ -1,0 +1,18 @@
+{
+  "tier2_globs": [
+    "src/auth/**",
+    "supabase/migrations/**",
+    "supabase/functions/**",
+    "supabase/tests/**",
+    "docs/decisions/**",
+    ".env.example"
+  ],
+  "tier2_path_regex": [
+    "supabase/functions/_shared/validate",
+    "supabase/functions/explain/",
+    "docs/COST_DEFENSE",
+    "docs/operator/"
+  ],
+  "tier1_only_globs": ["src/ui/**", "src/core/**", "src/engine/**", "src/explain/**"],
+  "tier0_globs": ["**/*.md", "**/.prettierrc*", "**/eslint.config.*"]
+}

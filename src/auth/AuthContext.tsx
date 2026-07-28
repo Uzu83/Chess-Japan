@@ -3,11 +3,12 @@
  *
  * 状態マシン(4値):
  *   'disabled'  … VITE_AUTH_ENABLED != '1' 等で auth 機能ごと無効。UI は一切出ない。
- *                 既存のオフラインテスト・フォーク・ローカル dev はここに落ちる
- *                 (= App の描画が従来と完全に同一、が必須要件)。
  *   'anonymous' … auth は有効だが未ログイン。SDK はロードしない(バンドル戦略)。
  *   'loading'   … セッション復元 or OAuth コールバック処理中。
  *   'signedIn'  … ログイン済み。profile を保持。
+ *
+ * 初版ログイン方式: Google / Apple / メール+パスワード / メール OTP。
+ * パスキー・Manual Linking は後続（Codex F005/F006）。ここには出さない。
  *
  * WHY Provider で SDK を即ロードしないか:
  *   多数派(未ログイン)に supabase-js 53KB gzip を読ませない。ロードの引き金は
@@ -19,37 +20,27 @@ import { getSupabase, hasStoredSession, isAuthConfigured, isOAuthCallback } from
 import { getMyProfile, setInitialRating } from './profile';
 import type { Profile, RatingSource } from './profile';
 import { AuthContext, disabledState } from './authState';
-import type { AuthState, AuthStatus } from './authState';
+import type { AuthState, AuthStatus, EmailAuthMode } from './authState';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  // enabled はマウント時に1回だけ判定(env はビルド時定数なので変わらない)。
   const enabled = isAuthConfigured();
 
   const [status, setStatus] = useState<AuthStatus>(() => {
     if (!enabled) return 'disabled';
-    // セッション持ち or OAuth 帰着なら復元処理(loading)へ。それ以外は SDK 非ロード。
     return hasStoredSession() || isOAuthCallback() ? 'loading' : 'anonymous';
   });
   const [profile, setProfile] = useState<Profile | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // onAuthStateChange の購読解除用。
   const unsubRef = useRef<(() => void) | null>(null);
-  // boot の一度きり実行を保証する Promise 保持。
-  // WHY unsubRef の有無で判定しないか(監査ワークフロー指摘): boot は async なので
-  // 「開始済みだが unsubRef 未設定」の窓があり、signInWithGoogle と effect が同時に
-  // 走ると購読が二重に張られる。Promise を握れば2回目以降は同じ boot を待つだけ。
   const bootPromiseRef = useRef<Promise<void> | null>(null);
 
-  /** SDK を起動してセッション監視を張り、現在のセッションから profile を読む(冪等)。 */
   const bootSession = useCallback((): Promise<void> => {
     if (bootPromiseRef.current) return bootPromiseRef.current;
 
     const boot = (async () => {
       const supabase = await getSupabase();
 
-      // OAuth 帰着時: detectSessionInUrl がコード交換を終えるのを onAuthStateChange で
-      // 待つ。getSession() を先に読むだけだと交換完了前に null を掴むことがある。
       const applySession = async (hasSession: boolean) => {
         if (!hasSession) {
           setProfile(null);
@@ -61,8 +52,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setProfile(p);
           setStatus('signedIn');
         } catch (e) {
-          // profile 取得失敗(ネットワーク等)でもログイン自体は成立している。
-          // profile=null の signedIn とし、オンボーディング側の自己修復に任せる。
           setProfile(null);
           setStatus('signedIn');
           setError(e instanceof Error ? e.message : String(e));
@@ -70,18 +59,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       };
 
       const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-        // INITIAL_SESSION: 復元完了(セッション有無どちらも来る)
-        // SIGNED_IN / SIGNED_OUT: 明示的な状態遷移
-        // TOKEN_REFRESHED 等では profile を読み直さない(無駄な往復を避ける)
         if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
           void applySession(Boolean(session));
         }
       });
       unsubRef.current = () => sub.subscription.unsubscribe();
 
-      // OAuth 帰着後は code/state だけを URL から消す(リロード再交換・共有事故防止)。
-      // WHY 全 query を落とさないか(Codex ゲート②指摘): 将来 ?fen= 等の正当な
-      // パラメータが付いたとき巻き添えで消してしまうため、PKCE 由来の2つに限定。
       if (isOAuthCallback()) {
         const url = new URL(window.location.href);
         url.searchParams.delete('code');
@@ -90,7 +73,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     })();
 
-    // 失敗したら次回リトライできるように捨てる(冪等ガードを恒久エラー化しない)。
     bootPromiseRef.current = boot.catch((e) => {
       bootPromiseRef.current = null;
       throw e;
@@ -101,17 +83,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (status === 'loading') {
       void bootSession().catch((e) => {
-        // SDK ロード自体の失敗(オフライン等)。匿名として続行 = 本体機能は無傷。
         setError(e instanceof Error ? e.message : String(e));
         setStatus('anonymous');
       });
     }
   }, [status, bootSession]);
 
-  // loading 永続化の watchdog(監査ワークフロー指摘): PKCE コード交換がネットワークで
-  // ハングすると INITIAL_SESSION が来ず loading のまま固まりうる。10 秒で匿名に落とし、
-  // 本体機能(対局・レビュー)を人質に取らない。10 秒の根拠: OAuth 往復直後の交換 API
-  // 1 リクエスト分として十分長く、ユーザーが「壊れた」と感じる前に解放できる長さ。
   useEffect(() => {
     if (status !== 'loading') return;
     const t = window.setTimeout(() => {
@@ -121,7 +98,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(t);
   }, [status]);
 
-  // アンマウント時に購読解除(StrictMode の mount→unmount→mount で漏れない)。
   useEffect(() => {
     return () => {
       unsubRef.current?.();
@@ -130,32 +106,109 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const signInWithGoogle = useCallback(async () => {
-    setError(null);
-    try {
-      setStatus('loading');
-      const supabase = await getSupabase();
-      await bootSession(); // 冪等(既に boot 済みなら同じ Promise を待つだけ)
-      const { error: e } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        // 戻り先は現在のオリジン(本番/preview/localhost すべて Supabase 側の
-        // Redirect URLs 許可リストに載せる必要がある — .env.example の運用メモ参照)。
-        options: { redirectTo: window.location.origin },
-      });
-      if (e) throw new Error(e.message);
-      // 成功時はフルページ遷移するのでここには戻らない。
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setStatus('anonymous');
-    }
-  }, [bootSession]);
+  const signInWithOAuthProvider = useCallback(
+    async (provider: 'google' | 'apple') => {
+      setError(null);
+      try {
+        setStatus('loading');
+        const supabase = await getSupabase();
+        await bootSession();
+        const { error: e } = await supabase.auth.signInWithOAuth({
+          provider,
+          options: { redirectTo: window.location.origin },
+        });
+        if (e) throw new Error(e.message);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setStatus('anonymous');
+      }
+    },
+    [bootSession],
+  );
+
+  const signInWithGoogle = useCallback(
+    () => signInWithOAuthProvider('google'),
+    [signInWithOAuthProvider],
+  );
+
+  const signInWithApple = useCallback(
+    () => signInWithOAuthProvider('apple'),
+    [signInWithOAuthProvider],
+  );
+
+  const signInWithEmailPassword = useCallback(
+    async (email: string, password: string, mode: EmailAuthMode) => {
+      setError(null);
+      const trimmed = email.trim();
+      if (!trimmed || !password) {
+        setError('メールアドレスとパスワードを入力してください');
+        return;
+      }
+      try {
+        setStatus('loading');
+        const supabase = await getSupabase();
+        await bootSession();
+        const origin = window.location.origin;
+        if (mode === 'signup') {
+          const { data, error: e } = await supabase.auth.signUp({
+            email: trimmed,
+            password,
+            options: { emailRedirectTo: origin },
+          });
+          if (e) throw new Error(e.message);
+          // Confirm Email ON のとき session は null。anonymous に戻して案内する。
+          if (!data.session) {
+            setStatus('anonymous');
+            setError('確認メールを送信しました。メール内のリンクで認証してください');
+            return;
+          }
+          // session あり（Confirm Email OFF 等）は onAuthStateChange が signedIn にする。
+        } else {
+          const { error: e } = await supabase.auth.signInWithPassword({
+            email: trimmed,
+            password,
+          });
+          if (e) throw new Error(e.message);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setStatus('anonymous');
+      }
+    },
+    [bootSession],
+  );
+
+  const signInWithEmailOtp = useCallback(
+    async (email: string): Promise<{ sent: true }> => {
+      setError(null);
+      const trimmed = email.trim();
+      if (!trimmed) {
+        setError('メールアドレスを入力してください');
+        throw new Error('email required');
+      }
+      try {
+        const supabase = await getSupabase();
+        await bootSession();
+        const { error: e } = await supabase.auth.signInWithOtp({
+          email: trimmed,
+          options: { emailRedirectTo: window.location.origin },
+        });
+        if (e) throw new Error(e.message);
+        setError('マジックリンクを送信しました。メールを確認してください');
+        return { sent: true };
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        throw e;
+      }
+    },
+    [bootSession],
+  );
 
   const signOut = useCallback(async () => {
     setError(null);
     try {
       const supabase = await getSupabase();
       await supabase.auth.signOut();
-      // onAuthStateChange(SIGNED_OUT) が anonymous へ落とす。
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -168,7 +221,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value: AuthState = enabled
-    ? { status, profile, signInWithGoogle, signOut, submitInitialRating, error }
+    ? {
+        status,
+        profile,
+        signInWithGoogle,
+        signInWithApple,
+        signInWithEmailPassword,
+        signInWithEmailOtp,
+        signOut,
+        submitInitialRating,
+        error,
+      }
     : disabledState;
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

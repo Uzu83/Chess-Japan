@@ -21,7 +21,7 @@ export const RATING_SOURCES = [
 ] as const;
 export type RatingSource = (typeof RATING_SOURCES)[number];
 
-/** profiles 1 行(0004 の列定義と一致)。 */
+/** profiles 1 行(0004 + 0006 の列定義と一致)。 */
 export interface Profile {
   id: string;
   display_name: string | null;
@@ -29,8 +29,23 @@ export interface Profile {
   games: number;
   rating_initialized: boolean;
   rating_source: RatingSource | null;
+  /** 0006: 公開プレイ分析の可視性。欠落時は private 扱い。 */
+  strength_visibility?: 'private' | 'public';
+  /** 0006: 公開ハンドル。非公開時は null。 */
+  public_handle?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** DB 行を Profile に正規化（migration 未適用・古い行の欠落列を吸収）。 */
+export function normalizeProfile(row: Record<string, unknown> | null): Profile | null {
+  if (!row || typeof row.id !== 'string') return null;
+  const vis = row.strength_visibility;
+  return {
+    ...(row as unknown as Profile),
+    strength_visibility: vis === 'public' ? 'public' : 'private',
+    public_handle: typeof row.public_handle === 'string' ? row.public_handle : null,
+  };
 }
 
 /**
@@ -42,7 +57,7 @@ export async function getMyProfile(): Promise<Profile | null> {
   const supabase = await getSupabase();
   const { data, error } = await supabase.from('profiles').select('*').maybeSingle();
   if (error) throw new Error(`profile 取得に失敗: ${error.message}`);
-  return (data as Profile | null) ?? null;
+  return normalizeProfile(data as Record<string, unknown> | null);
 }
 
 /**
@@ -61,8 +76,8 @@ export async function setInitialRating(rating: number, source: RatingSource): Pr
 
 /**
  * レート戦結果の反映(Elo はサーバーが再計算)。
- * 【2C-1 では未配線】migration に RPC は同梱済みだが、AI 戦結果→クラウド反映の
- * 呼び出しは 2C-2(クラウド同期)で行う。ここに置くのは契約を型で先に固定するため。
+ * 【ADR 0002 / Codex F002】GRANT されていない。クライアントから呼んでも失敗する。
+ * サーバー発行 challenge + 棋譜検証が揃うまで配線しない。型契約のため関数は残す。
  */
 export async function applyRatedResult(oppElo: number, score: 0 | 0.5 | 1): Promise<Profile> {
   const supabase = await getSupabase();
