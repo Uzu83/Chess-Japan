@@ -58,3 +58,4 @@ scratchpad/
 
 # playwright mcp snapshots (local)
 .playwright-mcp/
+prod-smoke-chess-japan.png
