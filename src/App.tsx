@@ -10,6 +10,7 @@ import { StrengthProfileView } from './ui/StrengthProfileView';
 import { PublicStrengthView } from './ui/PublicStrengthView';
 import { PvPView } from './ui/PvPView';
 import { FeedbackDialog } from './ui/FeedbackDialog';
+import { BillingButtons } from './ui/BillingButtons';
 import { SyncToastHost } from './ui/SyncToast';
 import { isAuthConfigured } from './auth/supabaseClient';
 import {
@@ -221,6 +222,7 @@ function App() {
                   支援する
                 </a>
               )}
+              <BillingButtons />
 
               {/* ログイン/アカウント。VITE_AUTH_ENABLED != '1' なら非表示。 */}
               <AuthButton onOpenStrength={() => switchMode('strength')} />

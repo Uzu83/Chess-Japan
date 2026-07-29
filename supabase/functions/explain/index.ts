@@ -37,11 +37,22 @@ import {
 // buildPrompt は _shared/prompt.ts に切り出し済み(2026-07-16・explain-label-data-plan.md ゲート① F001)。
 // 純ロジックを Deno 非依存にして vitest でテストできるようにする validate.ts と同じパターン。
 import { buildPrompt } from '../_shared/prompt.ts';
+import { getAuthUser } from '../_shared/authUser.ts';
+import {
+  FREE_DAY_LIMIT,
+  PRO_DEEP_MONTH_LIMIT,
+  PRO_FLASH_DAY_LIMIT,
+  RATE_WINDOW_DAY,
+  RATE_WINDOW_MONTH,
+  shouldUseDeepModel,
+  type Plan,
+} from '../_shared/billingPlans.ts';
+import { fetchProfileBilling, isProEntitled } from '../_shared/stripeProfile.ts';
 
 // ---- 設定値（マジックナンバーの根拠はコメントに固定） ----
 // レート制限/クォータ。1人開発・収益ゼロ前提で「正当な利用は十分通し、自動濫用は止める」値。
 const RATE_PER_MIN = Number(Deno.env.get('RATE_PER_MIN') ?? '15'); // 1分あたり（1局を数十手レビューしても足りる）
-const RATE_PER_DAY = Number(Deno.env.get('RATE_PER_DAY') ?? '200'); // 1日あたり（1IPで数局分。超過は濫用とみなす）
+const RATE_PER_DAY = Number(Deno.env.get('RATE_PER_DAY') ?? String(FREE_DAY_LIMIT)); // 匿名IP・決定値50
 
 const ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') ?? '')
   .split(',')
@@ -290,6 +301,17 @@ function resolveModel(provider: Provider): string {
   return Deno.env.get('CLAUDE_MODEL') ?? MODEL_DEFAULTS.claude;
 }
 
+/** Pro 深掘り用モデル。Gemini 統一時は GEMINI_PRO_MODEL（既定 gemini-2.5-pro）。 */
+function resolveDeepModel(provider: Provider): string {
+  if (provider === 'gemini') {
+    return Deno.env.get('GEMINI_PRO_MODEL') ?? 'gemini-2.5-pro';
+  }
+  if (provider === 'claude') {
+    return Deno.env.get('CLAUDE_PRO_MODEL') ?? MODEL_DEFAULTS.claude;
+  }
+  return Deno.env.get('GROK_PRO_MODEL') ?? MODEL_DEFAULTS.grok;
+}
+
 // ---- プロバイダ実装（すべて raw HTTP・同一インターフェース。max_tokens=500 でコスト上限を物理的に固定） ----
 
 // callX は handler が解決した model を受け取る（キャッシュキーに使った model と同一を実 payload に渡す＝#3 不変条件）。
@@ -344,9 +366,24 @@ async function callGrok(model: string, system: string, user: string): Promise<st
   return data.choices?.[0]?.message?.content ?? '';
 }
 
-async function callGemini(model: string, system: string, user: string): Promise<string> {
+async function callGemini(
+  model: string,
+  system: string,
+  user: string,
+  opts?: { deep?: boolean },
+): Promise<string> {
   const key = Deno.env.get('GEMINI_API_KEY');
   if (!key) throw new Error('GEMINI_API_KEY 未設定');
+  const deep = Boolean(opts?.deep);
+  // Pro(deep): thinking 無効化不可のため maxOutputTokens を上げる（PLAN・ADR）。
+  // Flash: thinkingBudget 0 で本文に予算を全振り。
+  const generationConfig: Record<string, unknown> = {
+    temperature: 0.4,
+    maxOutputTokens: deep ? 2500 : 500,
+  };
+  if (!deep) {
+    generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  }
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
     {
@@ -355,17 +392,7 @@ async function callGemini(model: string, system: string, user: string): Promise<
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts: [{ text: user }] }],
-        // thinkingBudget: 0 — Gemini 2.5 系(無印 flash 等)は thinking モデルで、内部思考トークンが
-        // maxOutputTokens の予算に「含まれる」。500 のままだと思考が予算をほぼ食い潰し、
-        // 本文が数十文字で途切れる実バグが出た(2026-07-07・gemini-2.5-flash で確認)。
-        // 1手解説に多段思考は不要なので thinking を無効化し、500 トークンを全部本文に使わせる。
-        // コスト影響: 減る方向(思考トークン分の課金が消える)。maxOutputTokens=500 の上限は不変。
-        // 注意: 2.5 Pro は thinking を無効化できない(将来 GEMINI_MODEL を Pro にするなら要再設計)。
-        generationConfig: {
-          temperature: 0.4,
-          maxOutputTokens: 500,
-          thinkingConfig: { thinkingBudget: 0 },
-        },
+        generationConfig,
       }),
     },
   );
@@ -379,9 +406,10 @@ function callProvider(
   model: string,
   system: string,
   user: string,
+  opts?: { deep?: boolean },
 ): Promise<string> {
   if (provider === 'grok') return callGrok(model, system, user);
-  if (provider === 'gemini') return callGemini(model, system, user);
+  if (provider === 'gemini') return callGemini(model, system, user, opts);
   return callClaude(model, system, user); // 既定
 }
 
@@ -428,29 +456,30 @@ Deno.serve(async (req: Request) => {
   if (!(await verifyTurnstile(req.headers.get('x-turnstile-token'), ip)))
     return new Response(JSON.stringify({ error: 'turnstile failed' }), { status: 403, headers });
 
-  // 共有ストアのレート制限（分）＋日次クォータ。コスト防衛の主防壁。
-  //   limited → 429（超過）。error → ENFORCE_STORE は 503（fail-closed: ストア障害時に無防備で叩かせない）、
-  //   キー無しローカルは素通し（開発を止めない）。
-  // なぜ検証/キャッシュ判定より“前”にレート制限するか（Codex指摘④への結論・意図的な順序）:
-  //   後ろに置くと、不正JSONや巨大bodyを無限に送る濫用が「カウントされず無料」になり濫用対策が抜ける。
-  //   濫用は入口で数えるのが正しい。「他人のクォータを焼ける」懸念は IP 詐称可否(#2)に帰着し、
-  //   その信頼境界は別ブロッカー #2 で確定する（ここで順序は変えない）。
+  // 任意 JWT → profiles.plan。anon のままなら free（IP 枠）。
+  // WHY checkout 前でも explain は動かす: 無料体験が転換の入口。
+  const authUser = await getAuthUser(req, {
+    supabaseUrl: SUPABASE_URL,
+    anonKey: Deno.env.get('SUPABASE_ANON_KEY') ?? undefined,
+    serviceRoleKey: SERVICE_ROLE_KEY,
+  });
+  let effectivePlan: Plan = 'free';
+  let uid: string | null = null;
+  if (authUser && STORE_READY && SUPABASE_URL && SERVICE_ROLE_KEY) {
+    const billing = await fetchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, authUser.id);
+    if (billing && isProEntitled(billing)) {
+      effectivePlan = 'pro';
+      uid = authUser.id;
+    } else if (billing) {
+      uid = authUser.id;
+    }
+  }
+
+  // 共有ストアのレート制限（分）＋日次／月次クォータ。コスト防衛の主防壁。
   const minRate = await rateCheck(`min:ip:${ip}`, RATE_PER_MIN, 60);
   if (minRate === 'limited')
     return new Response(JSON.stringify({ error: 'rate limited' }), { status: 429, headers });
   if (minRate === 'error' && ENFORCE_STORE)
-    return new Response(JSON.stringify({ error: 'rate limiter unavailable' }), {
-      status: 503,
-      headers,
-    });
-
-  const dayRate = await rateCheck(`day:ip:${ip}`, RATE_PER_DAY, 86_400);
-  if (dayRate === 'limited')
-    return new Response(JSON.stringify({ error: 'daily quota exceeded' }), {
-      status: 429,
-      headers,
-    });
-  if (dayRate === 'error' && ENFORCE_STORE)
     return new Response(JSON.stringify({ error: 'rate limiter unavailable' }), {
       status: 503,
       headers,
@@ -477,10 +506,19 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: result.error }), { status: 400, headers });
   const body = result.value;
 
-  const provider = resolveProvider(); // union に正規化（#3・指摘①）
-  const model = resolveModel(provider); // キャッシュキーと実呼び出しで“同一モデル”を使う(#3)
+  const depth = body.depth ?? 'standard';
+  const useDeep = shouldUseDeepModel(effectivePlan, depth);
+  if (depth === 'deep' && effectivePlan !== 'pro') {
+    return new Response(JSON.stringify({ error: 'pro required for deep explain' }), {
+      status: 402,
+      headers,
+    });
+  }
 
-  // explain はキャッシュ対象（同一局面+levelの再課金を防止＝コスト核）。followup は対話的なので非キャッシュ。
+  const provider = resolveProvider();
+  const model = useDeep ? resolveDeepModel(provider) : resolveModel(provider);
+
+  // explain はキャッシュ対象。hit 時はクォータを消費しない（原価ゼロの再利用）。
   let cacheKey: string | null = null;
   if (body.mode === 'explain') {
     cacheKey = await hashCacheKey(body, provider, model);
@@ -492,12 +530,57 @@ Deno.serve(async (req: Request) => {
       );
   }
 
+  // 日次/月次枠は LLM 課金前のみ消費。
+  if (useDeep && uid) {
+    const deepRate = await rateCheck(
+      `month:pro:deep:${uid}`,
+      PRO_DEEP_MONTH_LIMIT,
+      RATE_WINDOW_MONTH,
+    );
+    if (deepRate === 'limited')
+      return new Response(JSON.stringify({ error: 'deep monthly quota exceeded' }), {
+        status: 429,
+        headers,
+      });
+    if (deepRate === 'error' && ENFORCE_STORE)
+      return new Response(JSON.stringify({ error: 'rate limiter unavailable' }), {
+        status: 503,
+        headers,
+      });
+  } else if (effectivePlan === 'pro' && uid) {
+    const dayPro = await rateCheck(`day:pro:flash:${uid}`, PRO_FLASH_DAY_LIMIT, RATE_WINDOW_DAY);
+    if (dayPro === 'limited')
+      return new Response(JSON.stringify({ error: 'daily quota exceeded' }), {
+        status: 429,
+        headers,
+      });
+    if (dayPro === 'error' && ENFORCE_STORE)
+      return new Response(JSON.stringify({ error: 'rate limiter unavailable' }), {
+        status: 503,
+        headers,
+      });
+  } else {
+    const dayRate = await rateCheck(`day:ip:${ip}`, RATE_PER_DAY, RATE_WINDOW_DAY);
+    if (dayRate === 'limited')
+      return new Response(JSON.stringify({ error: 'daily quota exceeded' }), {
+        status: 429,
+        headers,
+      });
+    if (dayRate === 'error' && ENFORCE_STORE)
+      return new Response(JSON.stringify({ error: 'rate limiter unavailable' }), {
+        status: 503,
+        headers,
+      });
+  }
+
   const { system, user } = buildPrompt(body);
   try {
-    const text = await callProvider(provider, model, system, user);
+    const text = await callProvider(provider, model, system, user, { deep: useDeep });
     if (cacheKey && text)
       await cachePut(cacheKey, body.game, body.profile?.level ?? 'beginner', text, provider);
-    return new Response(JSON.stringify({ text, provider }), { headers });
+    return new Response(JSON.stringify({ text, provider, plan: effectivePlan, depth }), {
+      headers,
+    });
   } catch (err) {
     // OWASP A09 / CodeQL js/stack-trace-exposure: クライアントへ message/stack を返さない。
     console.error('provider call failed', err instanceof Error ? err.name : 'error');

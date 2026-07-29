@@ -12,6 +12,8 @@ export interface ExplainRequest {
   question?: string;
   history?: { role: 'user' | 'assistant'; content: string }[];
   profile?: KnowledgeProfile;
+  /** Pro 深掘り。サーバーが model を解決（クライアントは model 名を送らない）。 */
+  depth?: 'standard' | 'deep';
 }
 
 /*
@@ -108,6 +110,19 @@ export async function requestExplanation(req: ExplainRequest): Promise<string> {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${supabaseAnon()}`,
   };
+  // ログイン中は user JWT を送り Pro 枠を解決（pvp/client と同型）。
+  try {
+    const { getSupabase } = await import('../auth/supabaseClient');
+    const supabase = await getSupabase();
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+      headers.apikey = supabaseAnon()!;
+    }
+  } catch {
+    // Auth 未設定時は anon のまま
+  }
   // Turnstile 有効時のみ、リクエスト毎の新鮮なトークンを x-turnstile-token に付与（#2）。
   // 未設定なら null で無付与（バックエンドも非課金環境では検証 skip）。単発トークンなので都度取得。
   const turnstileToken = await getTurnstileToken();

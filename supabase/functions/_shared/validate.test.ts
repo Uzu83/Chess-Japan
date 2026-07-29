@@ -386,6 +386,7 @@ describe('cacheKeyInput', () => {
       const key = cacheKeyInput(r.value);
       expect(key).toEqual({
         game: 'chess',
+        depth: 'standard',
         context: {
           fenOrSfen: validExplain.context.fenOrSfen,
           movePlayed: 'e2e4',

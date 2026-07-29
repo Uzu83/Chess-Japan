@@ -20,19 +20,23 @@
 
 ローカルは `.env.local` でも可。
 
-## 2. Stripe サブスク（次・まだ実装しない）
+## 2. Stripe サブスク（SKU 決定済 2026-07-27・実装あり）
 
-目標（PLAN 案）: 月額 ¥400〜500 前後 → Pro 解説枠（例 100/日）・サーバー側で Gemini Pro。
+**運用の正:** [`docs/operator/stripe-runbook.md`](stripe-runbook.md)（test 強制・live フラグ・deploy 手順）  
+**OWASP:** [`docs/security/OWASP-billing.md`](../security/OWASP-billing.md)
 
-### 実装前チェックリスト（人間）
+**SKU:** ¥480/月・Flash 150/日 ＋ Pro 系 deep **30/月**。  
+**Week-1:** Checkout + Customer Portal + Webhook のみ。
+
+### 実装チェックリスト（人間）
 
 - [ ] Stripe アカウント（日本・消費税の扱い確認）
-- [ ] Product + Price（月額）を Dashboard で作成 → Price ID 控える
+- [ ] Product + Price（月額 ¥480）を Dashboard で作成 → Price ID 控える
 - [ ] Customer Portal 有効化
-- [ ] Webhook endpoint 設計（`checkout.session.completed` / `customer.subscription.*`）
-- [ ] Supabase: `profiles` または別表に `plan` / `stripe_customer_id`（RLS ロック設計）
-- [ ] Edge `explain`: JWT → plan → model（Flash/Pro）。**クライアント model 指定禁止**
-- [ ] 無料 IP 枠は維持（有料でも濫用防壁）。account quota は [0001](../decisions/0001-free-quota-account-abuse-defense.md)
+- [ ] Webhook endpoint（`checkout.session.completed` / `customer.subscription.*` / `invoice.payment_failed`）
+- [x] Supabase: `profiles.plan` / `stripe_*`（RLS・client UPDATE GRANT なし・0020）
+- [x] Edge `explain`: JWT → plan → depth。**クライアント model 指定禁止**
+- [x] 無料 IP 枠は維持（決定値 50/日）。account quota は [0001](../decisions/0001-free-quota-account-abuse-defense.md)
 - [ ] secrets: `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / Price ID（**手動承認**）
 - [ ] Tier 2 品質ゲート（authz / cost / data）
 
