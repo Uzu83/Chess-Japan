@@ -220,12 +220,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(p);
   }, []);
 
+  // refresh の世代番号。遅延リトライが古い応答で Pro 反映を上書きしないようにする。
+  const refreshSeqRef = useRef(0);
+
   const refreshProfile = useCallback(async () => {
     setError(null);
+    const seq = ++refreshSeqRef.current;
     try {
       const p = await getMyProfile();
+      if (seq !== refreshSeqRef.current) return;
       setProfile(p);
     } catch (e) {
+      if (seq !== refreshSeqRef.current) return;
       setError(e instanceof Error ? e.message : String(e));
     }
   }, []);

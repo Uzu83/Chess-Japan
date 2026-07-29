@@ -53,7 +53,7 @@ export function BillingButtons() {
         </button>
       )}
       {err && (
-        <span className="max-w-[10rem] truncate text-xs text-error" title={err}>
+        <span className="max-w-[14rem] text-xs leading-snug text-error sm:max-w-xs" title={err}>
           {err}
         </span>
       )}

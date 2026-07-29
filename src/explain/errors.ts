@@ -21,6 +21,11 @@ const BODY_JA: Record<string, string> = {
   unauthorized: 'ログインの有効期限が切れている可能性があります。再ログインしてください',
   'invalid depth': '解説の設定が不正です',
   'invalid json': 'リクエストの形式が不正です',
+  'bot protection required':
+    'ボット対策の確認が必要です。ページを再読み込みしてから再試行してください',
+  'payload too large': 'リクエストが大きすぎます。棋譜や履歴を減らして再試行してください',
+  'upstream failed': 'AI側で一時的な障害が発生しました。しばらくしてから再試行してください',
+  'origin not allowed': 'このページからの解説リクエストは許可されていません',
 };
 
 /**

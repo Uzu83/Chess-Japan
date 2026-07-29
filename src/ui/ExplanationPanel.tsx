@@ -50,6 +50,12 @@ interface ExplanationPanelProps {
   game?: GameKind;
   /** Pro 有効時 true。深掘りボタンのラベル・誘導を切り替える。 */
   isPro?: boolean;
+  /**
+   * 既存解説を残したまま出す一時エラー（深掘り 402 等）。
+   * explanations スロットを壊さないための別チャネル。
+   */
+  actionError?: string | null;
+  onDismissActionError?: () => void;
 }
 
 /** 解説テキストがエラーメッセージかどうかを判定。 */
@@ -148,6 +154,8 @@ export function ExplanationPanel({
   onAsk,
   game = 'chess',
   isPro = false,
+  actionError = null,
+  onDismissActionError,
 }: ExplanationPanelProps) {
   const [q, setQ] = useState('');
 
@@ -308,6 +316,34 @@ export function ExplanationPanel({
           >
             {explanation}
           </div>
+          {/* 追問中は下の吹き出しスケルトンがあるので、深掘り再取得のときだけここで告知。
+              追問は user 吹き出し追加後に busy になる → 最終手が user なら出さない。 */}
+          {busy && (thread.length === 0 || thread[thread.length - 1]?.role === 'assistant') && (
+            <p className="text-xs text-muted" aria-live="polite">
+              深掘り解説を取得中…
+            </p>
+          )}
+          {actionError && (
+            <div
+              role="alert"
+              className="rounded-lg p-2.5 text-xs"
+              style={{
+                backgroundColor: 'var(--q-miss-bg)',
+                color: 'var(--q-miss-fg)',
+              }}
+            >
+              <p>{actionError}</p>
+              {onDismissActionError && (
+                <button
+                  type="button"
+                  className="mt-1 underline opacity-80 hover:opacity-100"
+                  onClick={onDismissActionError}
+                >
+                  閉じる
+                </button>
+              )}
+            </div>
+          )}
           <button
             type="button"
             onClick={() => onExplain('deep')}

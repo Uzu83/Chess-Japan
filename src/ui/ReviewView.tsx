@@ -194,6 +194,8 @@ export function ReviewView({
   // Pro 判定（深掘りボタンのラベル用。実権限は Edge が 402 で担保）。
   const { profile: authProfile } = useAuth();
   const isPro = authProfile?.plan === 'pro' && authProfile?.stripe_status === 'active';
+  // 深掘り失敗時など、既存の通常解説を消さずに出す一時エラー（手替えでクリア）。
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // 共有リンクコピー状態(コピー後 2 秒間フィードバック表示)
   const [shareCopied, setShareCopied] = useState(false);
@@ -744,6 +746,7 @@ export function ReviewView({
     async (depth: ExplainDepth = 'standard') => {
       if (!currentContext) return;
       setBusy(true);
+      setActionError(null);
       try {
         const text = await requestExplanation({
           mode: 'explain',
@@ -754,16 +757,35 @@ export function ReviewView({
         });
         setExplanations((prev) => ({ ...prev, [currentPly]: text }));
       } catch (e) {
-        setExplanations((prev) => ({
-          ...prev,
-          [currentPly]: `解説の取得に失敗: ${(e as Error).message}`,
-        }));
+        const message = (e as Error).message;
+        /*
+         * WHY 深掘り失敗で explanations を上書きしないか:
+         *   通常解説のあとに無料ユーザーが「深掘り（Pro）」を押すと 402 になる。
+         *   そのとき既存本文をエラー文字列で置換すると、読めた解説と追問 UI が消える。
+         *   成功済み本文がある深掘り失敗だけ actionError に逃がす。
+         */
+        let preservedGood = false;
+        setExplanations((prev) => {
+          const existing = prev[currentPly];
+          const hasGood = typeof existing === 'string' && !existing.startsWith('解説の取得に失敗');
+          if (depth === 'deep' && hasGood) {
+            preservedGood = true;
+            return prev;
+          }
+          return { ...prev, [currentPly]: `解説の取得に失敗: ${message}` };
+        });
+        if (preservedGood) setActionError(message);
       } finally {
         setBusy(false);
       }
     },
     [currentContext, currentPly, profile, model],
   );
+
+  // 手を替えたら深掘り一時エラーを捨てる（別手の案内が残らないように）。
+  useEffect(() => {
+    setActionError(null);
+  }, [currentPly]);
 
   // onExplain の最新版を常に ref に同期(自動解説の stale closure 対策)
   onExplainRef.current = onExplain;
@@ -1417,6 +1439,8 @@ export function ReviewView({
               onAsk={onAsk}
               game={kind}
               isPro={isPro}
+              actionError={actionError}
+              onDismissActionError={() => setActionError(null)}
             />
           </div>
         </aside>
