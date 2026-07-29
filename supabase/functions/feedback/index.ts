@@ -20,6 +20,7 @@ import {
   buildFeedbackIssueTitle,
   validateFeedbackBody,
 } from '../_shared/feedbackValidate.ts';
+import { clientIp, resolveTurnstileHostnames, verifyTurnstileToken } from '../_shared/turnstile.ts';
 import { byteLengthOf as utf8Len } from '../_shared/validate.ts';
 
 // 専用レート（explain の RATE_* と分離。フィードバックは LLM 課金ではないが Issue 洪水対策）。
@@ -127,32 +128,15 @@ async function rateCheck(key: string, limit: number, windowSeconds: number): Pro
 
 async function verifyTurnstile(token: string | null, ip: string): Promise<boolean> {
   if (!TURNSTILE_SECRET) return true;
-  if (!token) return false;
-  try {
-    const form = new FormData();
-    form.append('secret', TURNSTILE_SECRET);
-    form.append('response', token);
-    if (ip && ip !== 'unknown') form.append('remoteip', ip);
-    const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-      method: 'POST',
-      body: form,
-    });
-    if (!res.ok) return false;
-    const data = await res.json();
-    return data.success === true;
-  } catch {
-    return false;
-  }
-}
-
-function clientIp(req: Request): string {
-  // explain と同じ: 補助用。硬い防壁は Turnstile。
-  const xff = req.headers.get('x-forwarded-for');
-  if (xff) {
-    const first = xff.split(',')[0]?.trim();
-    if (first) return first;
-  }
-  return req.headers.get('cf-connecting-ip') ?? 'unknown';
+  return verifyTurnstileToken({
+    secret: TURNSTILE_SECRET,
+    token,
+    ip,
+    allowedHostnames: resolveTurnstileHostnames(
+      Deno.env.get('TURNSTILE_ALLOWED_HOSTNAMES') ?? undefined,
+      Deno.env.get('ALLOWED_ORIGINS') ?? undefined,
+    ),
+  });
 }
 
 function jsonResponse(

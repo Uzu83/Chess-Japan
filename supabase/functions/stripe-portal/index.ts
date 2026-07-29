@@ -8,46 +8,41 @@
 
 import { getAuthUser } from '../_shared/authUser.ts';
 import { resolveBillingSiteUrl } from '../_shared/billingSite.ts';
+import { resolveCors } from '../_shared/cors.ts';
 import { rateCheck } from '../_shared/rateCheck.ts';
 import { assertStripeSecretKey, stripeRequest } from '../_shared/stripeHttp.ts';
 import { fetchProfileBilling } from '../_shared/stripeProfile.ts';
+import { clientIp } from '../_shared/turnstile.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? Deno.env.get('SB_PUBLISHABLE_KEY');
-const IS_HOSTED = Boolean(Deno.env.get('SB_EXECUTION_ID'));
+const IS_HOSTED = Boolean(Deno.env.get('SB_EXECUTION_ID') || Deno.env.get('DENO_DEPLOYMENT_ID'));
 
 const BILLING_RATE_PER_MIN = Number(Deno.env.get('BILLING_RATE_PER_MIN') ?? '5');
 const BILLING_RATE_PER_DAY = Number(Deno.env.get('BILLING_RATE_PER_DAY') ?? '20');
+const BILLING_RATE_PER_MIN_IP = Number(Deno.env.get('BILLING_RATE_PER_MIN_IP') ?? '10');
 
 const ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') ?? '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
 
-function cors(origin: string | null): Record<string, string> {
-  const base: Record<string, string> = {
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'authorization, content-type, apikey',
-    'Content-Type': 'application/json',
-    Vary: 'Origin',
-  };
-  if (ALLOWED_ORIGINS.includes('*')) {
-    return { ...base, 'Access-Control-Allow-Origin': origin ?? '*' };
-  }
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
-    return { ...base, 'Access-Control-Allow-Origin': origin };
-  }
-  if (ALLOWED_ORIGINS.length === 0) {
-    return { ...base, 'Access-Control-Allow-Origin': origin ?? '*' };
-  }
-  return { ...base, 'Access-Control-Allow-Origin': 'null' };
-}
-
 Deno.serve(async (req) => {
   const origin = req.headers.get('origin');
-  const headers = cors(origin);
-  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers });
+  const cors = resolveCors({
+    origin,
+    allowedOrigins: ALLOWED_ORIGINS,
+    isHosted: IS_HOSTED,
+    allowHeaders: 'authorization, content-type, apikey',
+  });
+  const headers = cors.headers;
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: cors.allowed ? 204 : 403, headers });
+  }
+  if (!cors.allowed) {
+    return new Response(JSON.stringify({ error: 'origin not allowed' }), { status: 403, headers });
+  }
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'method not allowed' }), { status: 405, headers });
   }
@@ -94,37 +89,22 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: 'email not confirmed' }), { status: 403, headers });
   }
 
-  const min = await rateCheck(
-    SUPABASE_URL,
-    SERVICE_ROLE_KEY,
-    `bill:po:min:${user.id}`,
-    BILLING_RATE_PER_MIN,
-    60,
-  );
-  if (min === 'limited') {
-    return new Response(JSON.stringify({ error: 'rate limited' }), { status: 429, headers });
-  }
-  if (min === 'error') {
-    return new Response(JSON.stringify({ error: 'rate limiter unavailable' }), {
-      status: 503,
-      headers,
-    });
-  }
-  const day = await rateCheck(
-    SUPABASE_URL,
-    SERVICE_ROLE_KEY,
-    `bill:po:day:${user.id}`,
-    BILLING_RATE_PER_DAY,
-    86_400,
-  );
-  if (day === 'limited') {
-    return new Response(JSON.stringify({ error: 'rate limited' }), { status: 429, headers });
-  }
-  if (day === 'error') {
-    return new Response(JSON.stringify({ error: 'rate limiter unavailable' }), {
-      status: 503,
-      headers,
-    });
+  const ip = clientIp(req);
+  for (const [key, limit, window] of [
+    [`bill:po:min:${user.id}`, BILLING_RATE_PER_MIN, 60],
+    [`bill:po:ip:${ip}`, BILLING_RATE_PER_MIN_IP, 60],
+    [`bill:po:day:${user.id}`, BILLING_RATE_PER_DAY, 86_400],
+  ] as const) {
+    const r = await rateCheck(SUPABASE_URL, SERVICE_ROLE_KEY, key, limit, window);
+    if (r === 'limited') {
+      return new Response(JSON.stringify({ error: 'rate limited' }), { status: 429, headers });
+    }
+    if (r === 'error') {
+      return new Response(JSON.stringify({ error: 'rate limiter unavailable' }), {
+        status: 503,
+        headers,
+      });
+    }
   }
 
   const profile = await fetchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, user.id);

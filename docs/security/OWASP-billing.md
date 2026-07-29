@@ -1,29 +1,30 @@
-# OWASP Top 10（2021）× Chess-Japan 課金レーン
+# OWASP Top 10（2021）× Chess-Japan
 
-対象: Stripe Checkout / Portal / Webhook / explain の Pro entitlement。  
-運用: [`stripe-runbook.md`](../operator/stripe-runbook.md)。Cloudflare / Stripe live は人間承認後のみ。
+対象: SPA + Supabase Edge（explain / feedback / pvp / Stripe）+ Cloudflare Pages。  
+課金運用: [`stripe-runbook.md`](../operator/stripe-runbook.md)。
 
 | ID | リスク | 本リポの対策 | 実装箇所 |
 |---|---|---|---|
-| **A01** Broken Access Control | 他人の plan 書き換え・オープンリダイレクト | `plan`/`stripe_*` は client UPDATE GRANT なし。Checkout/Portal は本人 JWT + email confirmed。return URL は **SITE_URL のみ**（Origin 不使用） | `0020` migration, `billingSite.ts`, checkout/portal |
-| **A02** Cryptographic Failures | 鍵漏洩・平文秘密 | 秘密は Supabase secrets のみ。`VITE_` に Stripe 秘密を出さない。live 鍵は `STRIPE_ALLOW_LIVE=1` 必須 | `.env.example`, `stripeHttp.ts` |
-| **A03** Injection | SQL/コマンド注入 | PostgREST 経由 + encodeURIComponent。Stripe は form API。ユーザー文字列を system prompt に入れない（既存 explain） | `stripeProfile.ts`, `validate.ts` |
-| **A04** Insecure Design | 原価割れ・濫用 | Pro deep 月30・Flash 日150・匿名日50。past_due→free。Checkout/Portal uid レート | `billingPlans.ts`, `explain`, checkout/portal |
-| **A05** Security Misconfiguration | CORS `*` + Origin 信頼、JWT 誤設定 | Billing return URL は `*` を無視。webhook のみ `--no-verify-jwt`（署名で代替）。checkout/portal は JWT 必須 | `billingSite.ts`, stripe-runbook |
-| **A06** Vulnerable Components | 依存の既知脆弱性 | GHAS: CodeQL(+extended) / Trivy / Dependabot / secret scanning+push protection。週次 Dependabot | `security.yml`, `dependabot.yml` |
-| **A07** Auth Failures | 匿名での課金開始 | Checkout/Portal: Bearer user JWT。anon/service_role key 拒否。email confirmed 必須 | `authUser.ts`, checkout/portal |
-| **A08** Software/Data Integrity | 偽 webhook | Stripe-Signature HMAC 検証 + 時刻許容。`stripe_webhook_events` で event_id 冪等。body 256KB 上限 | `stripeHttp.ts`, `0021`, webhook |
-| **A09** Logging Failures | 秘密・PII のログ | event type/id のみ。email / カード / raw body をログしない | webhook/checkout |
-| **A10** SSRF | ユーザー URL へサーバ fetch | Stripe API 固定ホストのみ。SITE_URL は env の https オリジン | `stripeHttp.ts`, `billingSite.ts` |
+| **A01** Broken Access Control | plan 書き換え・オープンリダイレクト・IDOR | `plan`/`stripe_*` は client UPDATE GRANT なし。Checkout/Portal は本人 JWT。return URL は **SITE_URL のみ**。pvp は body `user_id` 不使用 | migrations `0020`, `billingSite.ts`, checkout/portal/pvp |
+| **A02** Cryptographic Failures | 鍵漏洩 | 秘密は Supabase secrets のみ。Gemini は `x-goog-api-key`（URL に載せない）。live Stripe は `STRIPE_ALLOW_LIVE=1` | `stripeHttp.ts`, `explain` Gemini |
+| **A03** Injection | SQL / プロンプト注入 | PostgREST + encodeURIComponent。`validate.ts` 厳格検証。user 文字列は DATA 柵 | `validate.ts`, `prompt.ts` |
+| **A04** Insecure Design | 原価割れ・濫用・DoS | 日次/月次クォータ、Turnstile(+hostname)、body 上限（webhook 含む）、Checkout uid+IP レート | `billingPlans`, explain/feedback, `readBodyCapped` |
+| **A05** Security Misconfiguration | CORS / ヘッダ不足 | hosted で `ALLOWED_ORIGINS` 空は fail-closed。CSP + HSTS + `frame-ancestors 'none'` + COOP/COEP | `_shared/cors.ts`, `public/_headers` |
+| **A06** Vulnerable Components | 既知 CVE | CodeQL(+extended) / Trivy / Dependabot / secret scanning+push protection | `security.yml` |
+| **A07** Auth Failures | 匿名課金・トークン混同 | `getAuthUser` が anon/service_role を拒否。email confirmed。Turnstile hostname | `authUser.ts`, turnstile |
+| **A08** Software/Data Integrity | 偽 webhook | Stripe-Signature + event 冪等 + **Price ID を Stripe retrieve で fail-closed** | webhook, `0021` |
+| **A09** Logging Failures | 情報漏洩 | explain/pvp/Stripe は generic エラー。email/raw body 非ログ | explain/pvp/webhook |
+| **A10** SSRF | ユーザー URL fetch | Stripe/Gemini/Turnstile/GitHub は固定ホストのみ | Edge fetch 呼び出し |
 
-## 課金固有の追加規律
+## 課金固有
 
 1. Test mode 完走まで live 鍵を入れない  
 2. Cloudflare production デプロイは合意後のみ  
-3. Webhook 再送は 200 を返しつつ DB 冪等で無視  
-4. Tier 2 ゲート（authz/cost/data）を push 前に通す  
+3. Webhook 再送は 200 + DB 冪等  
+4. Tier 2（authz / cost / data）を push 前に通す  
 
-## 残課題（意図的に Week-1 外）
+## 意図的に残す / 次
 
-- Checkout/Portal の IP 単位レート（現状は uid 単位 `bill:co|po`）  
+- CSP の `style-src 'unsafe-inline'`（Tailwind/ランタイム style。将来 nonce 化を検討）  
+- AdSense 導入時は CSP `script-src` / `frame-src` を最小追加  
 - 運営用コストダッシュボード（GCP/Stripe UI で代替）
