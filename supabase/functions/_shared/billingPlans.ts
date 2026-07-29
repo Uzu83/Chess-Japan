@@ -35,6 +35,7 @@ export function parsePlan(raw: unknown): Plan {
 }
 
 export function parseStripeStatus(raw: unknown): StripeStatus {
+  // trialing は DB に来ても entitlement 上は active 扱いしない（Webhook 側で落としている）。
   if (raw === 'active' || raw === 'past_due' || raw === 'canceled') return raw;
   return 'none';
 }

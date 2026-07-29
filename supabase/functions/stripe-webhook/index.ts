@@ -142,8 +142,8 @@ async function handleEvent(type: string, obj: Record<string, unknown>): Promise<
       console.error('checkout.session.completed ignored: mode!=subscription');
       return;
     }
-    const paymentStatus = obj.payment_status;
-    if (paymentStatus !== 'paid' && paymentStatus !== 'no_payment_required') {
+    // Week-1: trial / 0円は Pro を付けない（LLM 原価防衛）。paid のみ。
+    if (obj.payment_status !== 'paid') {
       console.error('checkout.session.completed ignored: unpaid');
       return;
     }
@@ -220,6 +220,23 @@ async function handleEvent(type: string, obj: Record<string, unknown>): Promise<
       return;
     }
     const userId = profile.id;
+    const eventSubId = typeof obj.id === 'string' ? obj.id : null;
+    // invoice は subscription フィールドを持つことがある
+    const invoiceSubId = typeof obj.subscription === 'string' ? obj.subscription : null;
+    const subId = eventSubId ?? invoiceSubId;
+
+    // 別サブスクの古いイベントで現契約を壊さない
+    if (
+      profile.stripe_subscription_id &&
+      subId &&
+      profile.stripe_subscription_id !== subId &&
+      (type === 'customer.subscription.deleted' ||
+        type === 'invoice.payment_failed' ||
+        type === 'customer.subscription.updated')
+    ) {
+      console.error(`${type}: ignore non-current subscription`);
+      return;
+    }
 
     if (type === 'customer.subscription.deleted') {
       await requirePatch(userId, {
@@ -239,7 +256,6 @@ async function handleEvent(type: string, obj: Record<string, unknown>): Promise<
     }
 
     const status = mapSubStatus(obj.status);
-    const subId = typeof obj.id === 'string' ? obj.id : profile.stripe_subscription_id;
     if (status === 'canceled' || status === 'past_due' || status === 'none') {
       await requirePatch(userId, {
         plan: 'free',
@@ -249,7 +265,11 @@ async function handleEvent(type: string, obj: Record<string, unknown>): Promise<
       });
       return;
     }
-    // active / trialing
+    // active のみ Pro（trialing は原価防衛で付けない）
+    if (status !== 'active') {
+      console.error('subscription.updated ignored: not active paid');
+      return;
+    }
     await requirePatch(userId, {
       plan: 'pro',
       stripe_status: 'active',
@@ -266,7 +286,8 @@ function metaUserId(meta: unknown): string | null {
 }
 
 function mapSubStatus(raw: unknown): StripeStatus {
-  if (raw === 'active' || raw === 'trialing') return 'active';
+  // trialing は active にしない（Week-1・原価防衛）
+  if (raw === 'active') return 'active';
   if (raw === 'past_due' || raw === 'unpaid') return 'past_due';
   if (raw === 'canceled' || raw === 'incomplete_expired') return 'canceled';
   return 'none';
