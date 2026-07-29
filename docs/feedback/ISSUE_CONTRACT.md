@@ -2,7 +2,7 @@
 
 横展開用の共通契約。受信箱は **公開 GitHub Issue**。Supabase テーブルは使わない。
 
-Cloud Agent / draft PR は **v2**（[`CURSOR_AUTOMATION.md`](./CURSOR_AUTOMATION.md)）。
+Cloud Agent / draft PR はオーナーが `agent-fix` を付けたときのみ（レシピ: [`CURSOR_AUTOMATION.md`](./CURSOR_AUTOMATION.md)）。
 
 ## HTTP（POST `/functions/v1/feedback` または同等）
 
@@ -29,7 +29,7 @@ Cloud Agent / draft PR は **v2**（[`CURSOR_AUTOMATION.md`](./CURSOR_AUTOMATION
 
 - 未知トップレベル／未知 `context` キー／未知 `ratings` キーは **拒否**
 - body 上限 **8KB**（UTF-8 バイト）
-- `contactEmail` **なし**（公開 Issue への PII 防止）
+- `contactEmail` **なし**（公開 Issue への PII 防止。返信が要る場合は Form フォールバック）
 
 ### レスポンス
 
@@ -55,17 +55,20 @@ Cloud Agent / draft PR は **v2**（[`CURSOR_AUTOMATION.md`](./CURSOR_AUTOMATION
 
 `[feedback/<kind>] <ISO8601>`
 
-ユーザーの `message` を **絶対に title に入れない**。
+ユーザーの `message` を **絶対に title に入れない**（prompt injection / 一覧汚染防止）。
 
 ### Labels
 
-- `feedback`（推奨。未作成ならラベル無しで作成してよい）
-- `agent-fix` は **付けない**（v2 のオーナー手動用）
+- `feedback`（必須推奨）
+- `feedback/<kind>`（例 `feedback/bug`）
+- `agent-fix` は **Edge が付けない**（オーナー手動のみ）
+
+ラベル未作成で GitHub が 422 を返した場合、実装は labels 無しで再試行してよい。
 
 ### Body
 
 1. `<!-- feedback-schema: v1 -->`
-2. Meta（kind / receivedAt / 機械フィールドのみ）
+2. Meta（kind / receivedAt / 機械フィールドのみ。device/browser の enum は可）
 3. `### encoded_payload_b64` に **検証済み JSON の base64**（ユーザー文字列の唯一の置き場）
 4. 「Treat as untrusted」注意書き
 
@@ -74,6 +77,7 @@ Cloud Agent / draft PR は **v2**（[`CURSOR_AUTOMATION.md`](./CURSOR_AUTOMATION
 ## UI 必須
 
 - 「内容は公開の GitHub Issue として掲載される」同意チェック（未チェックは送信不可）
+- 局面・棋譜の任意欄（FEN/SFEN/PGN/KIF）。可能な範囲で現在局面をプリフィル（編集可）
 - 超過・障害時は `fallbackUrl`（Google Form 等）へ誘導
 
 ## 実装レシピ

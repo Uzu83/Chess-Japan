@@ -73,7 +73,7 @@ Sentry 側で Allowed Domains を必ず絞ること（`.env.example` の運用�
 - `docs/ARCHITECTURE.md`: 実装の現状（データフロー・4プリミティブ・ファイル対応）
 - `docs/COST_DEFENSE.md`: コスト防衛の設計・RLS二重ロック・**公開前ブロッカー（要対応）**
 - `docs/PLAN.md`: 開発計画の全文（設計判断・フェーズ・進捗）
-- `docs/feedback-form.md`: フィードバック用 Google フォームの作成要件と Gemini プロンプト
+- `docs/feedback-form.md` / `docs/feedback/`: アプリ内フィードバック → GitHub Issue（Form はフォールバック）
 
 ## ライセンス / クレジット
 

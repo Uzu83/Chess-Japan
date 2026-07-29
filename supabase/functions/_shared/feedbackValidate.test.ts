@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   FEEDBACK_MAX_BODY_BYTES,
   buildFeedbackIssueBody,
+  buildFeedbackIssueLabels,
   buildFeedbackIssueTitle,
+  contextFromBoardPaste,
   encodeFeedbackPayloadB64,
   normalizePageUrl,
   stripControls,
@@ -94,6 +96,20 @@ describe('encode + issue body', () => {
     expect(withoutFence.includes(valid.message)).toBe(false);
     const b64 = encodeFeedbackPayloadB64(payload.value);
     expect(body).toContain(b64);
+  });
+
+  it('labels は feedback + feedback/<kind>', () => {
+    expect(buildFeedbackIssueLabels('ux')).toEqual(['feedback', 'feedback/ux']);
+  });
+
+  it('contextFromBoardPaste は FEN/SFEN/KIF を振り分ける', () => {
+    const fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+    expect(contextFromBoardPaste(fen)).toEqual({ fen });
+    const sfen = 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1';
+    expect(contextFromBoardPaste(sfen)).toEqual({ sfen });
+    expect(contextFromBoardPaste('手合割：平手\n手数----指手')).toEqual({
+      kif: '手合割：平手\n手数----指手',
+    });
   });
 
   it('MAX は 8KB', () => {

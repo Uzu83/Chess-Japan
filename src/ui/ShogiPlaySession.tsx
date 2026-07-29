@@ -23,6 +23,7 @@ import {
 import { useAuth } from '../auth/authState';
 import { syncAiGameToCloud } from '../auth/cloudSync';
 import { notifyCloudSyncFailureOnce } from '../auth/cloudSyncNotify';
+import { setFeedbackBoardContext } from '../feedback/boardContext';
 
 /*
  * ShogiPlaySession — 将棋 AI 対局の自己完結状態機械（React.lazy 到達専用）
@@ -464,6 +465,12 @@ export default function ShogiPlaySession({ onReview, playFrom }: ShogiPlaySessio
   // ── 派生値 ──────────────────────────────────────────────────
   const isOver = snap?.outcome.over ?? false;
   const inGame = snap !== null;
+
+  // フィードバック用局面（将棋対局中）。
+  useEffect(() => {
+    if (!snap?.sfen) return;
+    setFeedbackBoardContext({ game: 'shogi', position: snap.sfen });
+  }, [snap?.sfen]);
   const oppColor = oppositeShogiColor(youColor);
   const opponentName = `AI (${activeDifficultyRef.current.label})`;
   // 盤を操作できるのは「自分の手番・思考中でない・続行中」のときだけ

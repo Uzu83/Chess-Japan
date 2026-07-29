@@ -1,13 +1,14 @@
-# フィードバック導線（v1）
+# フィードバック導線
 
 ## 正（推奨）: アプリ内送信 → 公開 GitHub Issue
 
 - UI: ヘッダー「フィードバック」→ [`FeedbackDialog`](../src/ui/FeedbackDialog.tsx)
 - API: Edge Function `feedback`（契約: [`docs/feedback/ISSUE_CONTRACT.md`](./feedback/ISSUE_CONTRACT.md)）
 - 運用: [`docs/operator/feedback-runbook.md`](./operator/feedback-runbook.md)
-- 自動 PR: **v2 予定**（[`docs/feedback/CURSOR_AUTOMATION.md`](./feedback/CURSOR_AUTOMATION.md)）
+- 自動 draft PR: オーナーが `agent-fix` を付けたときのみ（[`docs/feedback/CURSOR_AUTOMATION.md`](./feedback/CURSOR_AUTOMATION.md)）
 
-送信前に「公開 GitHub Issue になる」同意が必須。メールアドレス欄は無い。
+送信前に「公開 GitHub Issue になる」同意が必須。メールアドレス欄は無い（PII 防止）。
+局面（FEN/SFEN 等）は対局・レビュー中ならプリフィルされ、編集・消去できる。
 
 ## フォールバック: Google フォーム
 
