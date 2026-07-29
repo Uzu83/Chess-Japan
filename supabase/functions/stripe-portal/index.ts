@@ -101,8 +101,14 @@ Deno.serve(async (req) => {
     BILLING_RATE_PER_MIN,
     60,
   );
-  if (!min.allow) {
+  if (min === 'limited') {
     return new Response(JSON.stringify({ error: 'rate limited' }), { status: 429, headers });
+  }
+  if (min === 'error') {
+    return new Response(JSON.stringify({ error: 'rate limiter unavailable' }), {
+      status: 503,
+      headers,
+    });
   }
   const day = await rateCheck(
     SUPABASE_URL,
@@ -111,8 +117,14 @@ Deno.serve(async (req) => {
     BILLING_RATE_PER_DAY,
     86_400,
   );
-  if (!day.allow) {
+  if (day === 'limited') {
     return new Response(JSON.stringify({ error: 'rate limited' }), { status: 429, headers });
+  }
+  if (day === 'error') {
+    return new Response(JSON.stringify({ error: 'rate limiter unavailable' }), {
+      status: 503,
+      headers,
+    });
   }
 
   const profile = await fetchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, user.id);

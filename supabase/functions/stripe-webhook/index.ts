@@ -265,15 +265,21 @@ async function handleEvent(type: string, obj: Record<string, unknown>): Promise<
       });
       return;
     }
-    // active のみ Pro（trialing は原価防衛で付けない）
+    // active のみ。かつ「既にこの sub を保持している」場合だけ再確認で Pro 維持。
+    // stripe_subscription_id が null（解約直後）のときに古い updated が来ても復活させない。
+    // 初回 Pro 付与は checkout.session.completed のみ。
     if (status !== 'active') {
       console.error('subscription.updated ignored: not active paid');
+      return;
+    }
+    if (!subId || profile.stripe_subscription_id !== subId) {
+      console.error('subscription.updated ignored: not current stored subscription');
       return;
     }
     await requirePatch(userId, {
       plan: 'pro',
       stripe_status: 'active',
-      ...(subId ? { stripe_subscription_id: subId } : {}),
+      stripe_subscription_id: subId,
       stripe_customer_id: customerId,
     });
   }
