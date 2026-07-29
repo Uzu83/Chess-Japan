@@ -297,3 +297,35 @@ export function buildFeedbackIssueTitle(kind: FeedbackKind, receivedAtIso: strin
   // 秒まで入れて一覧で識別しやすくする。ユーザー message は絶対に入れない。
   return `[feedback/${kind}] ${receivedAtIso}`;
 }
+
+/**
+ * Issue labels。`feedback` + `feedback/<kind>`。
+ * `agent-fix` は付けない（オーナー手動・Automation v2 用）。
+ */
+export function buildFeedbackIssueLabels(kind: FeedbackKind): string[] {
+  return ['feedback', `feedback/${kind}`];
+}
+
+/**
+ * ユーザーが貼った局面・棋譜テキストを context キーへ振り分ける（UI 用）。
+ * 厳密パーサではない。不明なら pgn に落とす（4000 字上限は validate が担保）。
+ */
+export function contextFromBoardPaste(
+  raw: string | undefined,
+): FeedbackPayload['context'] | undefined {
+  if (!raw) return undefined;
+  const t = stripControls(raw).trim();
+  if (!t) return undefined;
+  if (t.includes('手数----') || t.includes('手合割') || t.includes('先手：')) {
+    return { kif: t };
+  }
+  const first = t.split(/\s+/)[0] ?? '';
+  const ranks = first.split('/').length;
+  // 将棋 SFEN: 9 段。チェス FEN: 8 段。
+  if (ranks === 9 && (/\s[bw]\s/.test(t) || /\s[bw]$/.test(t))) return { sfen: t };
+  if (ranks === 8 && /\s[wb]\s/.test(t)) return { fen: t };
+  if (ranks >= 8 && first.includes('/')) {
+    return ranks >= 9 ? { sfen: t } : { fen: t };
+  }
+  return { pgn: t };
+}

@@ -24,6 +24,7 @@ import {
 import { useAuth } from '../auth/authState';
 import { syncAiGameToCloud } from '../auth/cloudSync';
 import { notifyCloudSyncFailureOnce } from '../auth/cloudSyncNotify';
+import { setFeedbackBoardContext } from '../feedback/boardContext';
 import { PlayBoard } from './PlayBoard';
 
 /*
@@ -538,6 +539,12 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
   const oppColor = opposite(youColor);
   // AI 名は activeDifficultyRef から読む(startGame で snap 更新前に確定しているため描画時は常に最新)
   const opponentName = `AI (${activeDifficultyRef.current.label})`;
+
+  // フィードバック用局面（チェス対局中のみ。将棋は ShogiPlaySession が書く）。
+  useEffect(() => {
+    if (kind !== 'chess' || !snap?.fen) return;
+    setFeedbackBoardContext({ game: 'chess', position: snap.fen });
+  }, [kind, snap?.fen]);
 
   // 盤を操作できるのは「自分の手番・思考中でない・続行中」のときだけ
   const movableColor: PieceColor | undefined =

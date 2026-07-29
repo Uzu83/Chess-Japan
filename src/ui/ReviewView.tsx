@@ -12,6 +12,7 @@ import {
   type ShogiEngineKind,
 } from '../engine/factory';
 import { useAuth } from '../auth/authState';
+import { setFeedbackBoardContext } from '../feedback/boardContext';
 import { requestExplanation } from '../explain/client';
 import {
   hashPgn,
@@ -740,6 +741,15 @@ export function ReviewView({
   const lastMoveUci = model && index >= 1 ? moveRecords[index - 1].uci : null;
   const max = moveRecords.length;
 
+  // フィードバック用局面（レビューがアクティブなときだけ上書き）。
+  useEffect(() => {
+    if (!active) return;
+    setFeedbackBoardContext({
+      game: kind === 'shogi' ? 'shogi' : 'chess',
+      position: fen,
+    });
+  }, [active, kind, fen]);
+
   // ── 解説コールバック ─────────────────────────────────────────
 
   const onExplain = useCallback(
@@ -1434,7 +1444,9 @@ export function ReviewView({
               onAsk={onAsk}
               game={kind}
               isPro={isPro}
-              actionError={actionError}
+              actionError={
+                actionError && actionError.ply === currentPly ? actionError.message : null
+              }
               onDismissActionError={() => setActionError(null)}
             />
           </div>

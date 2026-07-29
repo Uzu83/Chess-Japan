@@ -1,18 +1,21 @@
 /*
  * FeedbackDialog.tsx — アプリ内フィードバック送信
  *
- * v1: 公開 GitHub Issue 起票のみ（Cloud Agent / draft PR は v2）。
+ * v1: 公開 GitHub Issue 起票のみ（Cloud Agent / draft PR は v2・agent-fix）。
  * 送信前に「内容は公開 Issue になる」同意が必須（Codex blocker）。
+ * 局面欄は対局/レビューが登録した FEN/SFEN をプリフィル（編集可）。
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   FEEDBACK_BROWSERS,
   FEEDBACK_DEVICES,
   FEEDBACK_KINDS,
+  contextFromBoardPaste,
   type FeedbackBrowser,
   type FeedbackDevice,
   type FeedbackKind,
 } from '../../supabase/functions/_shared/feedbackValidate';
+import { formatFeedbackBoardPaste, getFeedbackBoardContext } from '../feedback/boardContext';
 import { getFeedbackFormUrl, submitFeedback } from '../feedback/client';
 
 const KIND_LABELS: Record<FeedbackKind, string> = {
@@ -41,6 +44,7 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
   const [kind, setKind] = useState<FeedbackKind>('bug');
   const [message, setMessage] = useState('');
   const [repro, setRepro] = useState('');
+  const [boardPaste, setBoardPaste] = useState('');
   const [device, setDevice] = useState<FeedbackDevice | ''>('');
   const [browser, setBrowser] = useState<FeedbackBrowser | ''>('');
   const [consent, setConsent] = useState(false);
@@ -48,6 +52,15 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
   const [error, setError] = useState<string | null>(null);
   const [issueUrl, setIssueUrl] = useState<string | null>(null);
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
+
+  // open のたびに局面スナップショットをプリフィル（前回送信の残骸は捨てる）。
+  useEffect(() => {
+    if (!open) return;
+    setBoardPaste(formatFeedbackBoardPaste(getFeedbackBoardContext()));
+    setError(null);
+    setIssueUrl(null);
+    setFallbackUrl(null);
+  }, [open]);
 
   if (!open) return null;
 
@@ -58,6 +71,7 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
     setKind('bug');
     setMessage('');
     setRepro('');
+    setBoardPaste('');
     setDevice('');
     setBrowser('');
     setConsent(false);
@@ -81,7 +95,7 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
         device: device || undefined,
         browser: browser || undefined,
         pageUrl: typeof window !== 'undefined' ? window.location.href : undefined,
-        context: undefined,
+        context: contextFromBoardPaste(boardPaste),
       });
       if (result.ok) {
         setIssueUrl(result.issueUrl);
@@ -199,6 +213,19 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
                 rows={2}
                 maxLength={2000}
                 className="focus-ai mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-on-surface"
+              />
+            </label>
+
+            <label className="block text-xs text-muted">
+              局面・棋譜（任意・FEN / SFEN / PGN / KIF）
+              <textarea
+                value={boardPaste}
+                disabled={disabled}
+                onChange={(e) => setBoardPaste(e.target.value)}
+                rows={2}
+                maxLength={4000}
+                className="focus-ai mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 font-mono text-xs text-on-surface"
+                placeholder="対局・レビュー中なら自動で入ります。編集・消去して構いません"
               />
             </label>
 

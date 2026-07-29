@@ -14,12 +14,15 @@
 //
 // デプロイ: supabase functions deploy feedback
 
+import { resolveCors } from '../_shared/cors.ts';
 import {
   FEEDBACK_MAX_BODY_BYTES,
   buildFeedbackIssueBody,
+  buildFeedbackIssueLabels,
   buildFeedbackIssueTitle,
   validateFeedbackBody,
 } from '../_shared/feedbackValidate.ts';
+import { readBodyCapped } from '../_shared/readBodyCapped.ts';
 import { clientIp, resolveTurnstileHostnames, verifyTurnstileToken } from '../_shared/turnstile.ts';
 import { byteLengthOf as utf8Len } from '../_shared/validate.ts';
 
@@ -49,56 +52,6 @@ const HAS_GITHUB = Boolean(GITHUB_TOKEN && GITHUB_REPO);
 const ENFORCE_STORE = IS_HOSTED || HAS_GITHUB;
 const ENFORCE_TURNSTILE = IS_HOSTED || HAS_GITHUB;
 const ENFORCE_GITHUB = IS_HOSTED;
-
-function resolveCors(origin: string | null): { allowed: boolean; headers: Record<string, string> } {
-  const base: Record<string, string> = {
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'authorization, content-type, x-turnstile-token',
-    'Content-Type': 'application/json',
-    Vary: 'Origin',
-  };
-  if (ALLOWED_ORIGINS.includes('*')) {
-    return { allowed: true, headers: { ...base, 'Access-Control-Allow-Origin': origin ?? '*' } };
-  }
-  if (ALLOWED_ORIGINS.length === 0) {
-    if (!IS_HOSTED)
-      return { allowed: true, headers: { ...base, 'Access-Control-Allow-Origin': origin ?? '*' } };
-    return { allowed: false, headers: { ...base, 'Access-Control-Allow-Origin': 'null' } };
-  }
-  if (origin && ALLOWED_ORIGINS.includes(origin))
-    return { allowed: true, headers: { ...base, 'Access-Control-Allow-Origin': origin } };
-  if (!origin) return { allowed: true, headers: base };
-  return { allowed: false, headers: { ...base, 'Access-Control-Allow-Origin': 'null' } };
-}
-
-async function readBodyCapped(req: Request, max: number): Promise<string | null> {
-  const reader = req.body?.getReader();
-  if (!reader) {
-    const t = await req.text();
-    return utf8Len(t) > max ? null : t;
-  }
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      total += value.byteLength;
-      if (total > max) {
-        await reader.cancel();
-        return null;
-      }
-      chunks.push(value);
-    }
-  }
-  const merged = new Uint8Array(total);
-  let off = 0;
-  for (const c of chunks) {
-    merged.set(c, off);
-    off += c.byteLength;
-  }
-  return new TextDecoder().decode(merged);
-}
 
 function sbHeaders(): Record<string, string> {
   return {
@@ -155,37 +108,29 @@ function withFallback(body: Record<string, unknown>): Record<string, unknown> {
 async function createGitHubIssue(
   title: string,
   body: string,
+  labels: string[],
 ): Promise<{ ok: true; issueUrl: string } | { ok: false; error: string }> {
   const [owner, repo] = (GITHUB_REPO as string).split('/');
   if (!owner || !repo) return { ok: false, error: 'github repo misconfigured' };
+  const ghHeaders = {
+    Accept: 'application/vnd.github+json',
+    Authorization: `Bearer ${GITHUB_TOKEN}`,
+    'X-GitHub-Api-Version': '2022-11-28',
+    'Content-Type': 'application/json',
+    'User-Agent': 'chess-japan-feedback',
+  };
   try {
     const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues`, {
       method: 'POST',
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${GITHUB_TOKEN}`,
-        'X-GitHub-Api-Version': '2022-11-28',
-        'Content-Type': 'application/json',
-        'User-Agent': 'chess-japan-feedback',
-      },
-      body: JSON.stringify({
-        title,
-        body,
-        labels: ['feedback'],
-      }),
+      headers: ghHeaders,
+      body: JSON.stringify({ title, body, labels }),
     });
     if (!res.ok) {
       // labels 未作成で 422 のときは labels 無しで再試行（運用初期の摩擦を下げる）。
       if (res.status === 422) {
         const retry = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues`, {
           method: 'POST',
-          headers: {
-            Accept: 'application/vnd.github+json',
-            Authorization: `Bearer ${GITHUB_TOKEN}`,
-            'X-GitHub-Api-Version': '2022-11-28',
-            'Content-Type': 'application/json',
-            'User-Agent': 'chess-japan-feedback',
-          },
+          headers: ghHeaders,
           body: JSON.stringify({ title, body }),
         });
         if (!retry.ok) {
@@ -210,7 +155,12 @@ async function createGitHubIssue(
 
 Deno.serve(async (req) => {
   const origin = req.headers.get('origin');
-  const cors = resolveCors(origin);
+  const cors = resolveCors({
+    origin,
+    allowedOrigins: ALLOWED_ORIGINS,
+    isHosted: IS_HOSTED,
+    allowHeaders: 'authorization, content-type, x-turnstile-token',
+  });
   const headers = cors.headers;
 
   if (req.method === 'OPTIONS') {
@@ -277,10 +227,7 @@ Deno.serve(async (req) => {
       headers,
     );
 
-  const declaredLen = Number(req.headers.get('content-length'));
-  if (Number.isFinite(declaredLen) && declaredLen > FEEDBACK_MAX_BODY_BYTES) {
-    return jsonResponse(413, withFallback({ ok: false, error: 'payload too large' }), headers);
-  }
+  // Content-Length 先行チェックは readBodyCapped 内。ここはストリーム上限のみ。
   const raw = await readBodyCapped(req, FEEDBACK_MAX_BODY_BYTES);
   if (raw === null) {
     return jsonResponse(413, withFallback({ ok: false, error: 'payload too large' }), headers);
@@ -315,13 +262,14 @@ Deno.serve(async (req) => {
   const receivedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
   const title = buildFeedbackIssueTitle(validated.value.kind, receivedAt);
   const issueBody = buildFeedbackIssueBody(validated.value, receivedAt);
+  const labels = buildFeedbackIssueLabels(validated.value.kind);
 
   // 念のため本文サイズもガード（符号化後）。
   if (utf8Len(issueBody) > 60_000) {
     return jsonResponse(413, withFallback({ ok: false, error: 'payload too large' }), headers);
   }
 
-  const created = await createGitHubIssue(title, issueBody);
+  const created = await createGitHubIssue(title, issueBody, labels);
   if (!created.ok) {
     return jsonResponse(502, withFallback({ ok: false, error: created.error }), headers);
   }
