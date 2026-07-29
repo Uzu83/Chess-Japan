@@ -82,31 +82,9 @@
          applicationCategory=GameApplication: チェス/将棋はゲームカテゴリが最も近い。
          offers.price=0: 無料ツールであることを明示。
          WHY JSON-LD を <head> に置く: Google は <body> 内も認識するが <head> が推奨。 -->
-    <script type="application/ld+json">
-      {
-        "@context": "https://schema.org",
-        "@type": "WebApplication",
-        "name": "Chess-Japan",
-        "url": "https://chess-japan.pages.dev/",
-        "description": "チェス・将棋の棋譜（PGN/KIF/CSA/SFEN）を1手ずつ AI が日本語で解説し、AI との対局（強さ4段階・レート戦/カジュアル）や任意の局面・詰将棋からの対局もできる無料 Web ツール。Stockfish・やねうら王の評価値・最善手・悪手の理由が分かります。",
-        "applicationCategory": "GameApplication",
-        "operatingSystem": "Web",
-        "inLanguage": "ja",
-        "featureList": [
-          "チェス・将棋の棋譜を1手ずつAIが日本語で解説",
-          "AIと対局（強さ4段階・レート戦/カジュアル・盤反転）",
-          "任意の局面（FEN/SFEN）や詰将棋からの対局",
-          "評価値グラフ・手の質分類・精度サマリ",
-          "PGN / KIF / CSA / SFEN の棋譜読み込み",
-          "Stockfish（チェス）・やねうら王（将棋）をブラウザで実行"
-        ],
-        "offers": {
-          "@type": "Offer",
-          "price": "0",
-          "priceCurrency": "JPY"
-        }
-      }
-    </script>
+    <!-- JSON-LD: prettier-ignore で1行固定。CSP は base64 sha256-u2UXY33E1uLbf7Ef8CoS+QYcgede8FIoJYsuJ+PqA8U=（_headers）。 -->
+    <!-- prettier-ignore -->
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"Chess-Japan","url":"https://chess-japan.pages.dev/","description":"チェス・将棋の棋譜（PGN/KIF/CSA/SFEN）を1手ずつ AI が日本語で解説し、AI との対局（強さ4段階・レート戦/カジュアル）や任意の局面・詰将棋からの対局もできる無料 Web ツール。Stockfish・やねうら王の評価値・最善手・悪手の理由が分かります。","applicationCategory":"GameApplication","operatingSystem":"Web","inLanguage":"ja","featureList":["チェス・将棋の棋譜を1手ずつAIが日本語で解説","AIと対局（強さ4段階・レート戦/カジュアル・盤反転）","任意の局面（FEN/SFEN）や詰将棋からの対局","評価値グラフ・手の質分類・精度サマリ","PGN / KIF / CSA / SFEN の棋譜読み込み","Stockfish（チェス）・やねうら王（将棋）をブラウザで実行"],"offers":{"@type":"Offer","price":"0","priceCurrency":"JPY"}}</script>
 
     <!-- ── PWA Web App Manifest ──
          Service Worker は意図的に導入しない（COEP credentialless 下のキャッシュ複雑化回避）。

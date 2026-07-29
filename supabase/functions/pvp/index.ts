@@ -8,7 +8,9 @@
 // デプロイ: supabase functions deploy pvp
 // 本番順: migration 0010 → 旧 RPC 死確認 → 本 Function → 新 client → VITE_PVP_ENABLED=1
 
+import { getAuthUser } from '../_shared/authUser.ts';
 import { applySan } from '../_shared/chessPvp.ts';
+import { resolveCors } from '../_shared/cors.ts';
 
 const RATE_PER_MIN = Number(Deno.env.get('PVP_RATE_PER_MIN') ?? '30');
 const MAX_BODY = 2048;
@@ -17,33 +19,12 @@ const ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') ?? '')
   .split(',')
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
-const IS_HOSTED = Boolean(Deno.env.get('DENO_DEPLOYMENT_ID'));
+const IS_HOSTED = Boolean(Deno.env.get('SB_EXECUTION_ID') || Deno.env.get('DENO_DEPLOYMENT_ID'));
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY');
 const STORE_READY = Boolean(SUPABASE_URL && SERVICE_ROLE_KEY);
-
-function resolveCors(origin: string | null): { allowed: boolean; headers: Record<string, string> } {
-  const base: Record<string, string> = {
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'authorization, content-type',
-    'Content-Type': 'application/json',
-    Vary: 'Origin',
-  };
-  if (ALLOWED_ORIGINS.includes('*')) {
-    return { allowed: true, headers: { ...base, 'Access-Control-Allow-Origin': origin ?? '*' } };
-  }
-  if (ALLOWED_ORIGINS.length === 0) {
-    if (!IS_HOSTED)
-      return { allowed: true, headers: { ...base, 'Access-Control-Allow-Origin': origin ?? '*' } };
-    return { allowed: false, headers: { ...base, 'Access-Control-Allow-Origin': 'null' } };
-  }
-  if (origin && ALLOWED_ORIGINS.includes(origin))
-    return { allowed: true, headers: { ...base, 'Access-Control-Allow-Origin': origin } };
-  if (!origin) return { allowed: true, headers: base };
-  return { allowed: false, headers: { ...base, 'Access-Control-Allow-Origin': 'null' } };
-}
 
 function sbServiceHeaders(): Record<string, string> {
   return {
@@ -102,29 +83,6 @@ async function rateCheck(
   }
 }
 
-async function getUser(req: Request): Promise<{ id: string; emailConfirmed: boolean } | null> {
-  const auth = req.headers.get('authorization') ?? '';
-  if (!auth.toLowerCase().startsWith('bearer ')) return null;
-  const token = auth.slice(7).trim();
-  if (!token || !SUPABASE_URL) return null;
-  const key = ANON_KEY || SERVICE_ROLE_KEY;
-  if (!key) return null;
-  try {
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    if (!res.ok) return null;
-    const body = (await res.json()) as { id?: string; email_confirmed_at?: string | null };
-    if (typeof body.id !== 'string') return null;
-    return { id: body.id, emailConfirmed: Boolean(body.email_confirmed_at) };
-  } catch {
-    return null;
-  }
-}
-
 async function fetchRoom(roomId: string): Promise<Record<string, unknown> | null> {
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/pvp_rooms?id=eq.${encodeURIComponent(roomId)}&select=*`,
@@ -137,7 +95,12 @@ async function fetchRoom(roomId: string): Promise<Record<string, unknown> | null
 
 Deno.serve(async (req) => {
   const origin = req.headers.get('origin');
-  const cors = resolveCors(origin);
+  const cors = resolveCors({
+    origin,
+    allowedOrigins: ALLOWED_ORIGINS,
+    isHosted: IS_HOSTED,
+    allowHeaders: 'authorization, content-type',
+  });
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: cors.allowed ? 204 : 403, headers: cors.headers });
   }
@@ -160,7 +123,11 @@ Deno.serve(async (req) => {
     });
   }
 
-  const user = await getUser(req);
+  const user = await getAuthUser(req, {
+    supabaseUrl: SUPABASE_URL,
+    anonKey: ANON_KEY,
+    serviceRoleKey: SERVICE_ROLE_KEY,
+  });
   if (!user) {
     return new Response(JSON.stringify({ error: 'unauthorized' }), {
       status: 401,
@@ -300,10 +267,15 @@ Deno.serve(async (req) => {
 
   if (!rpc.ok) {
     const errText = await rpc.text();
-    return new Response(JSON.stringify({ error: errText || 'apply failed' }), {
-      status: rpc.status === 409 ? 409 : 400,
-      headers: cors.headers,
-    });
+    // OWASP A09: PostgREST 本文をクライアントへ返さない
+    console.error('pvp_apply_move failed', rpc.status, errText.slice(0, 200));
+    return new Response(
+      JSON.stringify({ error: rpc.status === 409 ? 'conflict' : 'apply failed' }),
+      {
+        status: rpc.status === 409 ? 409 : 400,
+        headers: cors.headers,
+      },
+    );
   }
 
   const updated = await rpc.json();

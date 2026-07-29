@@ -129,3 +129,21 @@ function timingSafeEqualHex(a: string, b: string): boolean {
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 }
+
+/**
+ * サブスクリプションの Price ID を Stripe API から取得（webhook の SKU 検証用）。
+ * items.data[0].price が string または object の両方に対応。
+ */
+export async function fetchSubscriptionPriceId(
+  secret: string,
+  subscriptionId: string,
+): Promise<string | null> {
+  if (!subscriptionId.startsWith('sub_')) return null;
+  const sub = await stripeRequest<{
+    items?: { data?: { price?: string | { id?: string } }[] };
+  }>(secret, 'GET', `/subscriptions/${encodeURIComponent(subscriptionId)}`);
+  const price = sub.items?.data?.[0]?.price;
+  if (typeof price === 'string' && price.startsWith('price_')) return price;
+  if (price && typeof price === 'object' && typeof price.id === 'string') return price.id;
+  return null;
+}

@@ -47,7 +47,13 @@ import {
   shouldUseDeepModel,
   type Plan,
 } from '../_shared/billingPlans.ts';
+import { resolveCors as resolveCorsShared } from '../_shared/cors.ts';
 import { fetchProfileBilling, isProEntitled } from '../_shared/stripeProfile.ts';
+import {
+  clientIp as sharedClientIp,
+  resolveTurnstileHostnames,
+  verifyTurnstileToken,
+} from '../_shared/turnstile.ts';
 
 // ---- 設定値（マジックナンバーの根拠はコメントに固定） ----
 // レート制限/クォータ。1人開発・収益ゼロ前提で「正当な利用は十分通し、自動濫用は止める」値。
@@ -59,7 +65,7 @@ const ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') ?? '')
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
 // 本番(ホスト環境)判定。Supabase/Deno Deploy は必ずこの環境変数を持つ。ローカル serve には無い。
-const IS_HOSTED = Boolean(Deno.env.get('DENO_DEPLOYMENT_ID'));
+const IS_HOSTED = Boolean(Deno.env.get('SB_EXECUTION_ID') || Deno.env.get('DENO_DEPLOYMENT_ID'));
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -97,27 +103,18 @@ const ENFORCE_TURNSTILE = HAS_PROVIDER_KEY;
  * 注意(合意点): CORS は curl 等の直叩きを防げない＝“補助策”。主防壁はレート制限/クォータ/Turnstile/入力検証。
  */
 function resolveCors(origin: string | null): { allowed: boolean; headers: Record<string, string> } {
-  const base: Record<string, string> = {
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'authorization, content-type, x-turnstile-token',
-    'Content-Type': 'application/json',
-    Vary: 'Origin',
-  };
-  if (ALLOWED_ORIGINS.includes('*')) {
-    return { allowed: true, headers: { ...base, 'Access-Control-Allow-Origin': origin ?? '*' } };
-  }
-  if (ALLOWED_ORIGINS.length === 0) {
-    // ローカルは許容（警告）、本番未設定は安全側に倒して全拒否。
-    if (!IS_HOSTED)
-      return { allowed: true, headers: { ...base, 'Access-Control-Allow-Origin': origin ?? '*' } };
-    return { allowed: false, headers: { ...base, 'Access-Control-Allow-Origin': 'null' } };
-  }
-  if (origin && ALLOWED_ORIGINS.includes(origin))
-    return { allowed: true, headers: { ...base, 'Access-Control-Allow-Origin': origin } };
-  // Origin 無し(ブラウザ外/同一オリジン)はここでは弾かない＝レート制限/Turnstile 側で受ける。
-  if (!origin) return { allowed: true, headers: base };
-  return { allowed: false, headers: { ...base, 'Access-Control-Allow-Origin': 'null' } };
+  return resolveCorsShared({
+    origin,
+    allowedOrigins: ALLOWED_ORIGINS,
+    isHosted: IS_HOSTED,
+    allowHeaders: 'authorization, content-type, x-turnstile-token',
+  });
 }
+
+const TURNSTILE_HOSTNAMES = resolveTurnstileHostnames(
+  Deno.env.get('TURNSTILE_ALLOWED_HOSTNAMES') ?? undefined,
+  Deno.env.get('ALLOWED_ORIGINS') ?? undefined,
+);
 
 // ---- body をストリームで読み、上限超過時は読み切らず打ち切る（Content-Length 偽装/欠落に強い） ----
 async function readBodyCapped(req: Request, max: number): Promise<string | null> {
@@ -236,28 +233,14 @@ async function cachePut(
   }
 }
 
-/** Cloudflare Turnstile トークン検証。TURNSTILE_SECRET 未設定なら検証スキップ（キー入手後に有効化）。 */
+/** Cloudflare Turnstile。secret 未設定はスキップ。設定時は hostname も照合。 */
 async function verifyTurnstile(token: string | null, ip: string): Promise<boolean> {
-  if (!TURNSTILE_SECRET) return true; // 未設定 = スキップ（dev / キー未発行段階）
-  if (!token) return false;
-  try {
-    const form = new FormData();
-    form.append('secret', TURNSTILE_SECRET);
-    form.append('response', token);
-    if (ip && ip !== 'unknown') form.append('remoteip', ip);
-    const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-      method: 'POST',
-      body: form,
-    });
-    if (!res.ok) return false;
-    const data = await res.json();
-    // success のみ確認（現状は Cloudflare widget 側の hostname 制限に依存）。将来フロントが action を付けるなら
-    // data.action 照合、hostname を縛るなら data.hostname 照合をここに足すと「このエンドポイント用トークンか」まで
-    // 検証できる（Codex指摘②・フロント連携時の申し送り）。
-    return data.success === true;
-  } catch {
-    return false; // 検証経路が壊れたら通さない（Turnstile は明示的に有効化したときだけ動くので fail-closed で良い）
-  }
+  return verifyTurnstileToken({
+    secret: TURNSTILE_SECRET,
+    token,
+    ip,
+    allowedHostnames: TURNSTILE_HOSTNAMES,
+  });
 }
 
 /**
@@ -384,11 +367,15 @@ async function callGemini(
   if (!deep) {
     generationConfig.thinkingConfig = { thinkingBudget: 0 };
   }
+  // A02: API キーを URL クエリに載せない（x-goog-api-key ヘッダ）
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': key,
+      },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts: [{ text: user }] }],
@@ -428,11 +415,7 @@ Deno.serve(async (req: Request) => {
   //   cf-connecting-ip は前段が Cloudflare のときだけ付く（無いこともある）ので最優先で読むが、過信しない。
   //   ?? でなく || を使う理由（Codex指摘・空文字バグ修正）: XFF が“空文字”のとき（Supabase で頻発）も
   //   ?? は素通しして ip='' になってしまう。|| なら空文字も次段→最終 'unknown' に正しく倒せる。
-  const ip =
-    req.headers.get('cf-connecting-ip') ||
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    req.headers.get('x-real-ip') ||
-    'unknown';
+  const ip = sharedClientIp(req);
 
   // 本番ハードガード（fail-closed の入口・Codex 保留判定 #1）:
   //   ENFORCE_STORE（hosted か課金キー有）なのに共有ストア（service_role 接続）が無い＝レート制限/

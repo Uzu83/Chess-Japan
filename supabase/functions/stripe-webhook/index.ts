@@ -8,7 +8,12 @@
 
 import { isStripeCustomerId, isStripeEventId, isSupabaseUserId } from '../_shared/billingIds.ts';
 import type { StripeStatus } from '../_shared/billingPlans.ts';
-import { assertStripeSecretKey, verifyStripeWebhook } from '../_shared/stripeHttp.ts';
+import { readBodyCapped } from '../_shared/readBodyCapped.ts';
+import {
+  assertStripeSecretKey,
+  fetchSubscriptionPriceId,
+  verifyStripeWebhook,
+} from '../_shared/stripeHttp.ts';
 import {
   fetchProfileBilling,
   fetchProfileByCustomerId,
@@ -18,6 +23,7 @@ import {
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 const EXPECTED_PRICE_ID = (Deno.env.get('STRIPE_PRICE_ID') ?? '').trim();
+const MAX_WEBHOOK_BYTES = 256_000;
 
 Deno.serve(async (req) => {
   if (req.method !== 'POST') {
@@ -28,8 +34,9 @@ Deno.serve(async (req) => {
   }
 
   const whsec = Deno.env.get('STRIPE_WEBHOOK_SECRET') ?? '';
+  let stripeSecret: string;
   try {
-    assertStripeSecretKey(
+    stripeSecret = assertStripeSecretKey(
       Deno.env.get('STRIPE_SECRET_KEY') ?? undefined,
       Deno.env.get('STRIPE_ALLOW_LIVE') === '1',
     );
@@ -41,7 +48,11 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: 'webhook secret missing' }), { status: 503 });
   }
 
-  const raw = await req.text();
+  // OWASP A04: 署名前に body 上限（未認証 DoS 対策）
+  const raw = await readBodyCapped(req, MAX_WEBHOOK_BYTES);
+  if (raw === null) {
+    return new Response(JSON.stringify({ error: 'payload too large' }), { status: 413 });
+  }
   let event: { id: string; type: string; data: { object: Record<string, unknown> } };
   try {
     event = await verifyStripeWebhook(raw, req.headers.get('stripe-signature'), whsec);
@@ -66,7 +77,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    await handleEvent(event.type, event.data.object);
+    await handleEvent(event.type, event.data.object, stripeSecret);
   } catch (e) {
     console.error('webhook handler error', e instanceof Error ? e.message : 'error');
     // 失敗時は claim を残すと再試行不能 → 削除して 500（Stripe が再送）
@@ -133,7 +144,11 @@ async function requirePatch(
   if (!ok) throw new Error(`profile patch failed for ${userId.slice(0, 8)}`);
 }
 
-async function handleEvent(type: string, obj: Record<string, unknown>): Promise<void> {
+async function handleEvent(
+  type: string,
+  obj: Record<string, unknown>,
+  stripeSecret: string,
+): Promise<void> {
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) throw new Error('store unavailable');
 
   if (type === 'checkout.session.completed') {
@@ -162,12 +177,8 @@ async function handleEvent(type: string, obj: Record<string, unknown>): Promise<
       throw new Error('checkout.session.completed missing subscription');
     }
     if (EXPECTED_PRICE_ID.startsWith('price_')) {
-      // line_items は expand しないと無いことがある。metadata / 単一 Price 運用で緩和。
-      const lineItems = obj.line_items as
-        { data?: { price?: { id?: string } | string }[] } | undefined;
-      const first = lineItems?.data?.[0]?.price;
-      const priceId = typeof first === 'string' ? first : first?.id;
-      if (priceId && priceId !== EXPECTED_PRICE_ID) {
+      const priceId = await fetchSubscriptionPriceId(stripeSecret, subId);
+      if (!priceId || priceId !== EXPECTED_PRICE_ID) {
         throw new Error('checkout.session.completed unexpected price');
       }
     }
@@ -280,6 +291,20 @@ async function handleEvent(type: string, obj: Record<string, unknown>): Promise<
     if (!subId || profile.stripe_subscription_id !== subId) {
       console.error('subscription.updated ignored: not current stored subscription');
       return;
+    }
+    if (EXPECTED_PRICE_ID.startsWith('price_')) {
+      const priceId = await fetchSubscriptionPriceId(stripeSecret, subId);
+      if (!priceId || priceId !== EXPECTED_PRICE_ID) {
+        // 別 Price へ付け替えられたら Pro を落とす（ack して再送ループしない）
+        console.error('subscription.updated unexpected price; demoting');
+        await requirePatch(userId, {
+          plan: 'free',
+          stripe_status: 'canceled',
+          stripe_subscription_id: null,
+          stripe_customer_id: customerId,
+        });
+        return;
+      }
     }
     await requirePatch(userId, {
       plan: 'pro',
