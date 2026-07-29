@@ -25,7 +25,8 @@ export async function verifyTurnstileToken(opts: {
     if (!res.ok) return false;
     const data = (await res.json()) as { success?: boolean; hostname?: string };
     if (data.success !== true) return false;
-    if (opts.allowedHostnames.length === 0) return true;
+    // secret があるのに hostname allowlist が空 = 設定不備。任意 host を許さない（fail-closed）。
+    if (opts.allowedHostnames.length === 0) return false;
     const host = typeof data.hostname === 'string' ? data.hostname.toLowerCase() : '';
     return Boolean(host && opts.allowedHostnames.includes(host));
   } catch {

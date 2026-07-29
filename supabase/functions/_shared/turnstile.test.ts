@@ -19,3 +19,5 @@ describe('resolveTurnstileHostnames', () => {
     expect(resolveTurnstileHostnames('', '*')).toEqual([]);
   });
 });
+
+// verifyTurnstileToken: secret あり + hostnames 空は fail-closed（結合は Edge 側）。

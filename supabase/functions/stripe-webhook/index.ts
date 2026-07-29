@@ -292,6 +292,20 @@ async function handleEvent(
       console.error('subscription.updated ignored: not current stored subscription');
       return;
     }
+    if (EXPECTED_PRICE_ID.startsWith('price_')) {
+      const priceId = await fetchSubscriptionPriceId(stripeSecret, subId);
+      if (!priceId || priceId !== EXPECTED_PRICE_ID) {
+        // 別 Price へ付け替えられたら Pro を落とす（ack して再送ループしない）
+        console.error('subscription.updated unexpected price; demoting');
+        await requirePatch(userId, {
+          plan: 'free',
+          stripe_status: 'canceled',
+          stripe_subscription_id: null,
+          stripe_customer_id: customerId,
+        });
+        return;
+      }
+    }
     await requirePatch(userId, {
       plan: 'pro',
       stripe_status: 'active',
