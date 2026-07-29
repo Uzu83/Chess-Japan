@@ -6,6 +6,7 @@ import { AuthProvider } from './auth/AuthContext';
 import { useAuth } from './auth/authState';
 import { AuthButton } from './ui/AuthButton';
 import { OnboardingRatingDialog } from './ui/OnboardingRatingDialog';
+import { SetPasswordDialog } from './ui/SetPasswordDialog';
 import { StrengthProfileView } from './ui/StrengthProfileView';
 import { PublicStrengthView } from './ui/PublicStrengthView';
 import { PvPView } from './ui/PvPView';
@@ -41,6 +42,11 @@ function OnboardingGate() {
   const { status, profile, submitInitialRating } = useAuth();
   if (status !== 'signedIn' || (profile && profile.rating_initialized)) return null;
   return <OnboardingRatingDialog onSubmit={submitInitialRating} />;
+}
+
+function PasswordRecoveryGate() {
+  const { passwordRecoveryPending, clearPasswordRecovery } = useAuth();
+  return <SetPasswordDialog open={passwordRecoveryPending} onClose={clearPasswordRecovery} />;
 }
 
 /*
@@ -137,26 +143,21 @@ function App() {
     <AuthProvider>
       {/* min-h-dvh: 動的ビューポート高で「最低でも画面いっぱい・コンテンツが長ければ伸びる」。
           min-h-full(親の%依存)はモバイルで下端スクロール切れの原因になるため dvh に変更。 */}
-      <div className="flex min-h-dvh flex-col bg-surface text-on-surface">
+      <div className="flex min-h-dvh flex-col text-on-surface">
         {/* Checkout 戻りバナーはヘッダー直上（Provider 内で refreshProfile 可）。 */}
         <BillingReturnBanner />
-        {/* ── ヘッダー ── */}
-        {/*
-         * shadow-card を加えてヘッダーにわずかな浮き感を与える。
-         * bg-surface を明示: shadow が透過背景で破綻しないよう自身の背景を確定させる。
-         */}
-        <header className="border-b border-border bg-surface px-5 py-3.5 shadow-card">
-          <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
-            {/* アプリタイトルエリア
-               WHY h1 は単一テキストノードのまま: getByText('Chess-Japan — 1手解説AI')
-               が h1 の textContent に一致する必要があるため、子要素で分割しない設計を維持
-               (実際に確認済み。App.test.tsx のアサーション変更は CLAUDE.md で NG)。
-               ♟ グリフは h1 の兄弟 span として配置 → h1.textContent は変わらない。 */}
-            <div className="flex items-center gap-2">
-              <span aria-hidden="true" className="select-none text-xl text-ai opacity-60">
+        {/* ── ヘッダー ──
+         * sticky + 透過ぼかしで「リッチだが薄い」シェル。h1 文言はテスト契約のため不変。 */}
+        <header className="sticky top-0 z-20 border-b border-border/80 bg-[color:color-mix(in_oklab,var(--color-surface)_86%,transparent)] px-5 py-3.5 backdrop-blur-md">
+          <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 animate-[fade-rise_420ms_ease-out]">
+            <div className="flex items-center gap-2.5">
+              <span
+                aria-hidden="true"
+                className="grid h-8 w-8 place-items-center rounded-xl bg-ai-bg text-sm text-ai"
+              >
                 ♟
               </span>
-              <h1 className="text-base font-semibold tracking-wide text-ai sm:text-lg">
+              <h1 className="font-display text-base tracking-tight text-on-surface sm:text-lg">
                 Chess-Japan — 1手解説AI
               </h1>
             </div>
@@ -172,7 +173,7 @@ function App() {
                 質感。選択タブは shadow-btn でわずかに浮いて「押されている感」を強調。 */}
               <div
                 aria-label="モード切替"
-                className="flex rounded-xl border border-border bg-surface p-0.5 shadow-card"
+                className="flex rounded-2xl border border-border bg-surface-2/80 p-0.5"
               >
                 {navItems.map(({ m, label }) => (
                   <button
@@ -181,9 +182,9 @@ function App() {
                     aria-pressed={mode === m}
                     onClick={() => switchMode(m)}
                     className={[
-                      'focus-ai min-h-11 whitespace-nowrap rounded-lg px-3 text-sm font-medium transition-colors',
+                      'focus-ai min-h-11 whitespace-nowrap rounded-xl px-3 text-sm font-medium transition-colors',
                       mode === m
-                        ? 'bg-ai text-white shadow-btn dark:bg-ai-dim'
+                        ? 'bg-ai text-white shadow-btn'
                         : 'text-muted hover:text-on-surface',
                     ].join(' ')}
                   >
@@ -310,6 +311,7 @@ function App() {
 
       {/* 初回サインイン時の初期レート設定(fixed オーバーレイなので配置は末尾でよい) */}
       <OnboardingGate />
+      <PasswordRecoveryGate />
       <FeedbackDialog open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
       <SyncToastHost />
     </AuthProvider>
