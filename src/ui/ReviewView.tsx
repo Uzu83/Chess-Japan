@@ -194,8 +194,8 @@ export function ReviewView({
   // Pro 判定（深掘りボタンのラベル用。実権限は Edge が 402 で担保）。
   const { profile: authProfile } = useAuth();
   const isPro = authProfile?.plan === 'pro' && authProfile?.stripe_status === 'active';
-  // 深掘り失敗時など、既存の通常解説を消さずに出す一時エラー（手替えでクリア）。
-  const [actionError, setActionError] = useState<string | null>(null);
+  // 深掘り失敗時など、既存の通常解説を消さずに出す一時エラー（ply 付きで手違い表示を防ぐ）。
+  const [actionError, setActionError] = useState<{ ply: number; message: string } | null>(null);
 
   // 共有リンクコピー状態(コピー後 2 秒間フィードバック表示)
   const [shareCopied, setShareCopied] = useState(false);
@@ -774,18 +774,13 @@ export function ReviewView({
           }
           return { ...prev, [currentPly]: `解説の取得に失敗: ${message}` };
         });
-        if (preservedGood) setActionError(message);
+        if (preservedGood) setActionError({ ply: currentPly, message });
       } finally {
         setBusy(false);
       }
     },
     [currentContext, currentPly, profile, model],
   );
-
-  // 手を替えたら深掘り一時エラーを捨てる（別手の案内が残らないように）。
-  useEffect(() => {
-    setActionError(null);
-  }, [currentPly]);
 
   // onExplain の最新版を常に ref に同期(自動解説の stale closure 対策)
   onExplainRef.current = onExplain;
