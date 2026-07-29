@@ -220,6 +220,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(p);
   }, []);
 
+  const refreshProfile = useCallback(async () => {
+    setError(null);
+    try {
+      const p = await getMyProfile();
+      setProfile(p);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
   const value: AuthState = enabled
     ? {
         status,
@@ -230,6 +240,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signInWithEmailOtp,
         signOut,
         submitInitialRating,
+        refreshProfile,
         error,
       }
     : disabledState;

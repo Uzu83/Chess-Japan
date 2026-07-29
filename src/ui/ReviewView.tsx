@@ -11,6 +11,7 @@ import {
   type EngineKind,
   type ShogiEngineKind,
 } from '../engine/factory';
+import { useAuth } from '../auth/authState';
 import { requestExplanation } from '../explain/client';
 import {
   hashPgn,
@@ -62,7 +63,7 @@ import { EvalBar } from './EvalBar';
 import { EvalGraph } from './EvalGraph';
 import { MoveList } from './MoveList';
 import { AccuracySummary } from './AccuracySummary';
-import { ExplanationPanel, type ChatTurn } from './ExplanationPanel';
+import { ExplanationPanel, type ChatTurn, type ExplainDepth } from './ExplanationPanel';
 import { SAMPLE_PGN, SAMPLE_GAMES } from './sample';
 
 const LEVELS: KnowledgeProfile['level'][] = ['beginner', 'intermediate', 'advanced'];
@@ -189,6 +190,10 @@ export function ReviewView({
 
   // 自動解説トグル(既定 OFF — コスト暴発防止)
   const [autoExplain, setAutoExplain] = useState(false);
+
+  // Pro 判定（深掘りボタンのラベル用。実権限は Edge が 402 で担保）。
+  const { profile: authProfile } = useAuth();
+  const isPro = authProfile?.plan === 'pro' && authProfile?.stripe_status === 'active';
 
   // 共有リンクコピー状態(コピー後 2 秒間フィードバック表示)
   const [shareCopied, setShareCopied] = useState(false);
@@ -735,26 +740,30 @@ export function ReviewView({
 
   // ── 解説コールバック ─────────────────────────────────────────
 
-  const onExplain = useCallback(async () => {
-    if (!currentContext) return;
-    setBusy(true);
-    try {
-      const text = await requestExplanation({
-        mode: 'explain',
-        game: model?.kind ?? 'chess',
-        context: currentContext,
-        profile,
-      });
-      setExplanations((prev) => ({ ...prev, [currentPly]: text }));
-    } catch (e) {
-      setExplanations((prev) => ({
-        ...prev,
-        [currentPly]: `解説の取得に失敗: ${(e as Error).message}`,
-      }));
-    } finally {
-      setBusy(false);
-    }
-  }, [currentContext, currentPly, profile, model]);
+  const onExplain = useCallback(
+    async (depth: ExplainDepth = 'standard') => {
+      if (!currentContext) return;
+      setBusy(true);
+      try {
+        const text = await requestExplanation({
+          mode: 'explain',
+          game: model?.kind ?? 'chess',
+          context: currentContext,
+          profile,
+          depth,
+        });
+        setExplanations((prev) => ({ ...prev, [currentPly]: text }));
+      } catch (e) {
+        setExplanations((prev) => ({
+          ...prev,
+          [currentPly]: `解説の取得に失敗: ${(e as Error).message}`,
+        }));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [currentContext, currentPly, profile, model],
+  );
 
   // onExplain の最新版を常に ref に同期(自動解説の stale closure 対策)
   onExplainRef.current = onExplain;
@@ -1407,6 +1416,7 @@ export function ReviewView({
               onExplain={onExplain}
               onAsk={onAsk}
               game={kind}
+              isPro={isPro}
             />
           </div>
         </aside>

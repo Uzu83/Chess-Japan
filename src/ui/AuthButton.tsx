@@ -51,6 +51,7 @@ export function AuthButton({
 
   const name = profile?.display_name ?? 'プレイヤー';
   const localRating = loadRating();
+  const isPro = profile?.plan === 'pro' && profile?.stripe_status === 'active';
   return (
     <div className="relative">
       <button
@@ -61,6 +62,11 @@ export function AuthButton({
         className="focus-ai flex min-h-11 items-center gap-1.5 rounded-lg border border-border px-3 text-sm text-on-surface transition-colors hover:border-ai"
       >
         <span className="max-w-28 truncate font-medium">{name}</span>
+        {isPro && (
+          <span className="text-[10px] font-semibold tracking-wide text-ai" title="Pro プラン">
+            Pro
+          </span>
+        )}
         {localRating && (
           <span className="text-xs text-muted" title="この端末の対局レート（対局結果で変動）">
             {localRating.rating}
@@ -97,6 +103,11 @@ export function AuthButton({
                 <span className="ml-1 text-subtle">（クラウド・固定）</span>
               </p>
             )}
+            <p className="mt-0.5">
+              プラン:{' '}
+              <span className="font-semibold text-on-surface">{isPro ? 'Pro' : '無料'}</span>
+              {isPro && <span className="ml-1 text-subtle">（深掘り月30・Flash厚枠）</span>}
+            </p>
             <p className="mt-1 text-[11px] leading-relaxed text-subtle">
               対局の勝敗は端末レートに反映されます。クラウドの初期設定はオンボーディング時の値です。
             </p>

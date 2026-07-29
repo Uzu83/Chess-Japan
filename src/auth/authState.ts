@@ -27,6 +27,11 @@ export interface AuthState {
   signOut: () => Promise<void>;
   /** オンボーディングの確定。成功時は profile が更新される。 */
   submitInitialRating: (rating: number, source: RatingSource) => Promise<void>;
+  /**
+   * profiles を再取得（Checkout 戻りで webhook 反映を拾う等）。
+   * signedIn 以外では no-op。失敗時は error に載せる。
+   */
+  refreshProfile: () => Promise<void>;
   /** 直近の auth 操作エラー(表示用)。情報メッセージにも流用する場合あり。 */
   error: string | null;
 }
@@ -41,6 +46,7 @@ export const disabledState: AuthState = {
   signInWithEmailOtp: async () => ({ sent: true as const }),
   signOut: async () => {},
   submitInitialRating: async () => {},
+  refreshProfile: async () => {},
   error: null,
 };
 

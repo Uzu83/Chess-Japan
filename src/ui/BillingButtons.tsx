@@ -24,6 +24,8 @@ export function BillingButtons() {
       await fn();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      // 成功時は Stripe へ遷移するため実質到達しないが、失敗・例外時の busy 固着を防ぐ。
       setBusy(false);
     }
   };

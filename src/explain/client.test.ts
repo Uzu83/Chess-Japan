@@ -1,6 +1,15 @@
-import { beforeEach, afterEach, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { isBackendConfigured, localExplanation, requestExplanation } from './client';
 import type { ExplainRequest } from './client';
+
+/*
+ * Turnstile はモジュール定数で SITE_KEY を捕獲するため、.env.local にキーがあると
+ * getTurnstileToken が script 待ちでハングする。API エラー試験では必ず no-op にする。
+ */
+vi.mock('./turnstile', () => ({
+  getTurnstileToken: async () => null,
+  isTurnstileEnabled: () => false,
+}));
 
 /*
  * env の明示 stub(テスト決定性):
@@ -50,5 +59,33 @@ describe('explain client (バックエンド未設定)', () => {
   it('followup はローカル応答を返す', () => {
     const text = localExplanation({ ...baseReq, mode: 'followup', question: 'どういうこと?' });
     expect(text).toContain('どういうこと?');
+  });
+});
+
+describe('explain client (API エラー)', () => {
+  beforeEach(() => {
+    vi.stubEnv('VITE_SUPABASE_URL', 'https://example.supabase.co');
+    vi.stubEnv('VITE_SUPABASE_ANON_KEY', 'anon-test');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('402 deep は日本語メッセージで throw', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ error: 'pro required for deep explain' }, { status: 402 })),
+    );
+    await expect(requestExplanation({ ...baseReq, depth: 'deep' })).rejects.toThrow(/Pro/);
+  });
+
+  it('429 日次枠は日本語メッセージで throw', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ error: 'daily quota exceeded' }, { status: 429 })),
+    );
+    await expect(requestExplanation(baseReq)).rejects.toThrow(/本日/);
   });
 });

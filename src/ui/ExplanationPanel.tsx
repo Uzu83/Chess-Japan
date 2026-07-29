@@ -36,20 +36,35 @@ export interface ChatTurn {
   content: string;
 }
 
+export type ExplainDepth = 'standard' | 'deep';
+
 interface ExplanationPanelProps {
   context: ExplanationContext | null;
   explanation: string | null;
   thread: ChatTurn[];
   busy: boolean;
-  onExplain: () => void;
+  /** depth 省略時は standard。深掘りは Pro 枠（サーバーが 402 で弾く）。 */
+  onExplain: (depth?: ExplainDepth) => void;
   onAsk: (question: string) => void;
   /** ゲーム種別。評価値の scale（将棋=生評価値 / チェス=ポーン換算）に使う。既定 chess で従来挙動。 */
   game?: GameKind;
+  /** Pro 有効時 true。深掘りボタンのラベル・誘導を切り替える。 */
+  isPro?: boolean;
 }
 
 /** 解説テキストがエラーメッセージかどうかを判定。 */
 function isError(text: string): boolean {
   return text.startsWith('解説の取得に失敗');
+}
+
+/** 「解説の取得に失敗: 」以降の本文（なければ汎用文）。 */
+function errorDetail(text: string): string {
+  const prefix = '解説の取得に失敗:';
+  if (text.startsWith(prefix)) {
+    const rest = text.slice(prefix.length).trim();
+    if (rest) return rest;
+  }
+  return 'AI側が混み合っている可能性があります。少し待ってから再試行してください。';
 }
 
 /*
@@ -132,6 +147,7 @@ export function ExplanationPanel({
   onExplain,
   onAsk,
   game = 'chess',
+  isPro = false,
 }: ExplanationPanelProps) {
   const [q, setQ] = useState('');
 
@@ -225,15 +241,30 @@ export function ExplanationPanel({
         /* 状態 3: 初回取得中 → スケルトン */
         <SkeletonLoader />
       ) : !hasExplanation ? (
-        /* 状態 2: 未取得 → 解説ボタン */
-        <button
-          type="button"
-          onClick={onExplain}
-          disabled={busy}
-          className="focus-ai self-start rounded-lg bg-ai px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-ai-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-ai-dim dark:hover:bg-ai"
-        >
-          この手を解説する
-        </button>
+        /* 状態 2: 未取得 → 通常解説 + 深掘り（Pro） */
+        <div className="flex flex-col items-start gap-2">
+          <button
+            type="button"
+            onClick={() => onExplain('standard')}
+            disabled={busy}
+            className="focus-ai rounded-lg bg-ai px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-ai-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-ai-dim dark:hover:bg-ai"
+          >
+            この手を解説する
+          </button>
+          <button
+            type="button"
+            onClick={() => onExplain('deep')}
+            disabled={busy}
+            title={
+              isPro
+                ? 'より詳しい深掘り解説（月30回まで）'
+                : 'Pro プラン限定。未登録でも押すと案内が表示されます'
+            }
+            className="focus-ai rounded-lg border border-ai px-3 py-1.5 text-xs font-medium text-ai transition-colors hover:bg-ai-bg disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-ai-deep"
+          >
+            {isPro ? '深掘り解説' : '深掘り解説（Pro）'}
+          </button>
+        </div>
       ) : showError ? (
         /* 状態 5: エラー
            q-miss-* 変数は @theme 外の CSS 変数のため Tailwind 任意値で参照する。
@@ -241,7 +272,8 @@ export function ExplanationPanel({
            WHY 再試行ボタンを置くか(実運用で発覚したUX穴): 以前は文言で「再試行してください」と
            言いながらボタンが無く、一度失敗するとその手はリロードまで行き止まりだった。
            Gemini 無料枠は一時的な 503(過負荷)を返すことがあり、数秒後の再試行で普通に通る。
-           ボタン1つで復帰できるようにする(onExplain は上書き保存なのでそのまま再利用可)。 */
+           ボタン1つで復帰できるようにする(onExplain は上書き保存なのでそのまま再利用可)。
+           詳細文は formatExplainApiError の日本語をそのまま出す（402/429 の誘導を殺さない）。 */
         <div
           role="alert"
           className="rounded-lg p-3 text-sm"
@@ -251,12 +283,10 @@ export function ExplanationPanel({
           }}
         >
           <p className="font-medium">解説を取得できませんでした</p>
-          <p className="mt-1 text-xs opacity-80">
-            AI側が混み合っている可能性があります。少し待ってから再試行してください。
-          </p>
+          <p className="mt-1 text-xs opacity-80">{errorDetail(explanation!)}</p>
           <button
             type="button"
-            onClick={onExplain}
+            onClick={() => onExplain('standard')}
             disabled={busy}
             className="focus-ai mt-2 min-h-9 rounded-lg border px-3 text-xs font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
             style={{ borderColor: 'var(--q-miss-fg)', color: 'var(--q-miss-fg)' }}
@@ -265,17 +295,30 @@ export function ExplanationPanel({
           </button>
         </div>
       ) : (
-        /* 状態 4: 解説あり */
-        <div
-          role="article"
-          aria-label="AI解説"
-          /* 解説テキストは主役 — 読みやすさ最優先のタイポ設定:
-             leading-relaxed: 行間を広め(日本語の可読性向上)
-             tracking-wide: 字間を少し広げる(ゆったりした印象)
-             max-w: 解説パネルの幅内で行長を適切に収める             */
-          className="whitespace-pre-wrap rounded-xl bg-surface p-4 text-sm leading-relaxed tracking-wide text-on-surface"
-        >
-          {explanation}
+        /* 状態 4: 解説あり — 深掘りで上書き再取得も可能 */
+        <div className="flex flex-col gap-2">
+          <div
+            role="article"
+            aria-label="AI解説"
+            /* 解説テキストは主役 — 読みやすさ最優先のタイポ設定:
+               leading-relaxed: 行間を広め(日本語の可読性向上)
+               tracking-wide: 字間を少し広げる(ゆったりした印象)
+               max-w: 解説パネルの幅内で行長を適切に収める             */
+            className="whitespace-pre-wrap rounded-xl bg-surface p-4 text-sm leading-relaxed tracking-wide text-on-surface"
+          >
+            {explanation}
+          </div>
+          <button
+            type="button"
+            onClick={() => onExplain('deep')}
+            disabled={busy}
+            title={
+              isPro ? '同じ手を深掘りモデルで再解説（月30回まで）' : 'Pro プラン限定の深掘り解説'
+            }
+            className="focus-ai self-start text-xs font-medium text-ai underline-offset-2 hover:underline disabled:opacity-40"
+          >
+            {isPro ? '深掘りで再解説' : '深掘りで再解説（Pro）'}
+          </button>
         </div>
       )}
 

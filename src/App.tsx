@@ -11,6 +11,7 @@ import { PublicStrengthView } from './ui/PublicStrengthView';
 import { PvPView } from './ui/PvPView';
 import { FeedbackDialog } from './ui/FeedbackDialog';
 import { BillingButtons } from './ui/BillingButtons';
+import { BillingReturnBanner } from './ui/BillingReturnBanner';
 import { SyncToastHost } from './ui/SyncToast';
 import { isAuthConfigured } from './auth/supabaseClient';
 import {
@@ -137,6 +138,8 @@ function App() {
       {/* min-h-dvh: 動的ビューポート高で「最低でも画面いっぱい・コンテンツが長ければ伸びる」。
           min-h-full(親の%依存)はモバイルで下端スクロール切れの原因になるため dvh に変更。 */}
       <div className="flex min-h-dvh flex-col bg-surface text-on-surface">
+        {/* Checkout 戻りバナーはヘッダー直上（Provider 内で refreshProfile 可）。 */}
+        <BillingReturnBanner />
         {/* ── ヘッダー ── */}
         {/*
          * shadow-card を加えてヘッダーにわずかな浮き感を与える。

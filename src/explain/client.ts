@@ -1,6 +1,7 @@
 import type { ExplanationContext, KnowledgeProfile, MoveQuality } from '../core/types';
 import { qualityLabelJa } from '../core/classify';
 import { uciToSan, uciLineToSan } from '../core/notation';
+import { formatExplainApiError } from './errors';
 import { getTurnstileToken } from './turnstile';
 
 export type ExplainMode = 'explain' | 'followup';
@@ -132,10 +133,10 @@ export async function requestExplanation(req: ExplainRequest): Promise<string> {
     headers,
     body: JSON.stringify(req),
   });
+  const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
   if (!res.ok) {
-    throw new Error(`explain API error: ${res.status}`);
+    throw new Error(formatExplainApiError(res.status, data.error));
   }
-  const data = (await res.json()) as { text?: string; error?: string };
-  if (data.error) throw new Error(data.error);
+  if (data.error) throw new Error(formatExplainApiError(res.status, data.error));
   return data.text ?? '';
 }
