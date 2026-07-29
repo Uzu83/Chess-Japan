@@ -24,6 +24,8 @@ export function BillingButtons() {
       await fn();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      // 成功時は Stripe へ遷移するため実質到達しないが、失敗・例外時の busy 固着を防ぐ。
       setBusy(false);
     }
   };
@@ -51,7 +53,7 @@ export function BillingButtons() {
         </button>
       )}
       {err && (
-        <span className="max-w-[10rem] truncate text-xs text-error" title={err}>
+        <span className="max-w-[14rem] text-xs leading-snug text-error sm:max-w-xs" title={err}>
           {err}
         </span>
       )}

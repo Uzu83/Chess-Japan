@@ -4,6 +4,7 @@
  * 秘密キーは一切触らない。フロントは JWT のみ送り、決済 UI は Stripe hosted。
  */
 import { getSupabase, isAuthConfigured } from '../auth/supabaseClient';
+import { formatBillingApiError } from './errors';
 
 function supabaseUrl(): string | undefined {
   return import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -37,7 +38,7 @@ async function postBilling(path: 'stripe-checkout' | 'stripe-portal'): Promise<s
     body: '{}',
   });
   const body = (await res.json().catch(() => ({}))) as { url?: string; error?: string };
-  if (!res.ok) throw new Error(body.error || `billing error (${res.status})`);
+  if (!res.ok) throw new Error(formatBillingApiError(res.status, body.error));
   if (!body.url) throw new Error('リダイレクト URL がありません');
   return body.url;
 }
