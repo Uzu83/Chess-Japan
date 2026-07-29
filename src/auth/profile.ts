@@ -35,8 +35,10 @@ export interface Profile {
   public_handle?: string | null;
   /** 0020: free|pro。webhook のみが書く。 */
   plan?: 'free' | 'pro';
-  stripe_customer_id?: string | null;
-  stripe_subscription_id?: string | null;
+  /**
+   * Stripe オブジェクト ID はクライアントに出さない（XSS/トークン窃取時の爆破半径）。
+   * Portal/Checkout は Edge が service_role で読む。
+   */
   stripe_status?: 'none' | 'active' | 'past_due' | 'canceled';
   created_at: string;
   updated_at: string;
@@ -54,9 +56,6 @@ export function normalizeProfile(row: Record<string, unknown> | null): Profile |
     strength_visibility: vis === 'public' ? 'public' : 'private',
     public_handle: typeof row.public_handle === 'string' ? row.public_handle : null,
     plan,
-    stripe_customer_id: typeof row.stripe_customer_id === 'string' ? row.stripe_customer_id : null,
-    stripe_subscription_id:
-      typeof row.stripe_subscription_id === 'string' ? row.stripe_subscription_id : null,
     stripe_status,
   };
 }
@@ -66,9 +65,13 @@ export function normalizeProfile(row: Record<string, unknown> | null): Profile |
  * 行が無い(トリガ失敗等の異常系)は null — その場合も set_initial_rating が
  * 自己修復で行を作るので、呼び出し側はオンボーディングへ誘導すればよい。
  */
+/** クライアントが entitlement 判定に使う列のみ（stripe_*_id は除外）。 */
+const PROFILE_SELECT =
+  'id,display_name,rating,games,rating_initialized,rating_source,strength_visibility,public_handle,plan,stripe_status,created_at,updated_at';
+
 export async function getMyProfile(): Promise<Profile | null> {
   const supabase = await getSupabase();
-  const { data, error } = await supabase.from('profiles').select('*').maybeSingle();
+  const { data, error } = await supabase.from('profiles').select(PROFILE_SELECT).maybeSingle();
   if (error) throw new Error(`profile 取得に失敗: ${error.message}`);
   return normalizeProfile(data as Record<string, unknown> | null);
 }
