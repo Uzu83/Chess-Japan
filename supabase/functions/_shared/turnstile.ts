@@ -58,11 +58,16 @@ export function resolveTurnstileHostnames(
     .filter(Boolean);
 }
 
-/** explain と同じ IP 解決順: cf-connecting-ip → XFF 先頭 → unknown */
+/**
+ * explain と同じ IP 解決順: cf-connecting-ip → XFF 先頭 → unknown
+ *
+ * WHY `||` であって `??` でないか: 空文字ヘッダ（Supabase で XFF='' が頻発）を
+ * `??` は素通しして ip='' の共有バケットに潰す。`||` なら空も次段へ倒せる。
+ */
 export function clientIp(req: Request): string {
   return (
-    req.headers.get('cf-connecting-ip') ??
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+    req.headers.get('cf-connecting-ip') ||
+    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     'unknown'
   );
 }

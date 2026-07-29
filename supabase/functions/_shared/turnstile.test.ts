@@ -2,7 +2,7 @@
  * turnstile.test.ts — hostname 解決
  */
 import { describe, expect, it } from 'vitest';
-import { resolveTurnstileHostnames } from './turnstile';
+import { clientIp, resolveTurnstileHostnames } from './turnstile';
 
 describe('resolveTurnstileHostnames', () => {
   it('prefers explicit TURNSTILE_ALLOWED_HOSTNAMES', () => {
@@ -17,6 +17,21 @@ describe('resolveTurnstileHostnames', () => {
   });
   it('ignores wildcard', () => {
     expect(resolveTurnstileHostnames('', '*')).toEqual([]);
+  });
+});
+
+describe('clientIp', () => {
+  it('falls through empty cf-connecting-ip to XFF', () => {
+    const req = new Request('https://example.test/', {
+      headers: { 'cf-connecting-ip': '', 'x-forwarded-for': '203.0.113.9, 10.0.0.1' },
+    });
+    expect(clientIp(req)).toBe('203.0.113.9');
+  });
+  it('uses unknown when all IP headers empty', () => {
+    const req = new Request('https://example.test/', {
+      headers: { 'cf-connecting-ip': '', 'x-forwarded-for': '' },
+    });
+    expect(clientIp(req)).toBe('unknown');
   });
 });
 

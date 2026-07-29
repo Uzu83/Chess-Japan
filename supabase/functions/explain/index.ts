@@ -20,7 +20,7 @@
 //   TURNSTILE_SECRET（課金キーがある環境では必須＝未設定なら 503。キー無しの dev/preview のみ任意）
 //   ALLOWED_ORIGINS（本番は必須。例 https://chess-japan.pages.dev）
 //   LLM_PROVIDER（claude|grok|gemini。既定 claude）/ CLAUDE_MODEL / GROK_MODEL / GEMINI_MODEL
-//   RATE_PER_MIN（既定15）/ RATE_PER_DAY（既定200）
+//   RATE_PER_MIN（既定15）/ RATE_PER_DAY（既定50＝FREE_DAY_LIMIT。COST_DEFENSE 決定値）
 //   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY はホスト環境が自動注入（手動設定不要）。
 //
 // デプロイ: supabase functions deploy explain

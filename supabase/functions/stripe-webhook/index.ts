@@ -12,6 +12,7 @@ import { readBodyCapped } from '../_shared/readBodyCapped.ts';
 import {
   assertStripeSecretKey,
   fetchSubscriptionPriceId,
+  requirePriceId,
   verifyStripeWebhook,
 } from '../_shared/stripeHttp.ts';
 import {
@@ -22,7 +23,13 @@ import {
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-const EXPECTED_PRICE_ID = (Deno.env.get('STRIPE_PRICE_ID') ?? '').trim();
+// fail-closed: Price 未設定時に検証をスキップすると別 SKU でも Pro 付与されうる（監査 medium）。
+let EXPECTED_PRICE_ID = '';
+try {
+  EXPECTED_PRICE_ID = requirePriceId(Deno.env.get('STRIPE_PRICE_ID') ?? undefined);
+} catch {
+  // Deno.serve 内で 503 を返す（モジュール load 時 throw は起動失敗ログが分かりにくい）
+}
 const MAX_WEBHOOK_BYTES = 256_000;
 
 Deno.serve(async (req) => {
@@ -31,6 +38,9 @@ Deno.serve(async (req) => {
   }
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
     return new Response(JSON.stringify({ error: 'service unavailable' }), { status: 503 });
+  }
+  if (!EXPECTED_PRICE_ID.startsWith('price_')) {
+    return new Response(JSON.stringify({ error: 'billing not configured' }), { status: 503 });
   }
 
   const whsec = Deno.env.get('STRIPE_WEBHOOK_SECRET') ?? '';
@@ -176,7 +186,7 @@ async function handleEvent(
     if (!subId || typeof subId !== 'string') {
       throw new Error('checkout.session.completed missing subscription');
     }
-    if (EXPECTED_PRICE_ID.startsWith('price_')) {
+    {
       const priceId = await fetchSubscriptionPriceId(stripeSecret, subId);
       if (!priceId || priceId !== EXPECTED_PRICE_ID) {
         throw new Error('checkout.session.completed unexpected price');
@@ -292,7 +302,7 @@ async function handleEvent(
       console.error('subscription.updated ignored: not current stored subscription');
       return;
     }
-    if (EXPECTED_PRICE_ID.startsWith('price_')) {
+    {
       const priceId = await fetchSubscriptionPriceId(stripeSecret, subId);
       if (!priceId || priceId !== EXPECTED_PRICE_ID) {
         // 別 Price へ付け替えられたら Pro を落とす（ack して再送ループしない）
