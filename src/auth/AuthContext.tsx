@@ -31,6 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
   const [profile, setProfile] = useState<Profile | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [passwordRecoveryPending, setPasswordRecoveryPending] = useState(false);
 
   const unsubRef = useRef<(() => void) | null>(null);
   const bootPromiseRef = useRef<Promise<void> | null>(null);
@@ -59,6 +60,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       };
 
       const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'PASSWORD_RECOVERY') {
+          setPasswordRecoveryPending(true);
+          void applySession(Boolean(session));
+          return;
+        }
         if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
           void applySession(Boolean(session));
         }
@@ -204,11 +210,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [bootSession],
   );
 
+  const resetPassword = useCallback(
+    async (email: string): Promise<{ sent: true }> => {
+      setError(null);
+      const trimmed = email.trim();
+      if (!trimmed) {
+        setError('メールアドレスを入力してください');
+        throw new Error('email required');
+      }
+      try {
+        const supabase = await getSupabase();
+        await bootSession();
+        const { error: e } = await supabase.auth.resetPasswordForEmail(trimmed, {
+          redirectTo: window.location.origin,
+        });
+        if (e) throw new Error(e.message);
+        setError(
+          'パスワード再設定メールを送信しました。リンクから新しいパスワードを設定してください',
+        );
+        return { sent: true };
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        throw e;
+      }
+    },
+    [bootSession],
+  );
+
+  const updatePassword = useCallback(async (password: string) => {
+    setError(null);
+    if (!password || password.length < 8) {
+      setError('パスワードは8文字以上にしてください');
+      throw new Error('password too short');
+    }
+    const supabase = await getSupabase();
+    const { error: e } = await supabase.auth.updateUser({ password });
+    if (e) {
+      setError(e.message);
+      throw new Error(e.message);
+    }
+    setPasswordRecoveryPending(false);
+  }, []);
+
+  const clearPasswordRecovery = useCallback(() => {
+    setPasswordRecoveryPending(false);
+  }, []);
+
   const signOut = useCallback(async () => {
     setError(null);
     try {
       const supabase = await getSupabase();
       await supabase.auth.signOut();
+      setPasswordRecoveryPending(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -244,6 +297,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signInWithApple,
         signInWithEmailPassword,
         signInWithEmailOtp,
+        resetPassword,
+        updatePassword,
+        passwordRecoveryPending,
+        clearPasswordRecovery,
         signOut,
         submitInitialRating,
         refreshProfile,

@@ -1,76 +1,57 @@
 @import 'tailwindcss';
 
 /*
- * Chess-Japan — デザイントークン定義
+ * Chess-Japan — デザイントークン
  *
- * テーマ「静かな日本的モダン」: 和紙 × 墨 × 一点差し色（藍）
+ * テーマ「Ink Board」: 冷たい紙白 × 墨インク × フェルト緑（チェス盤の緑に寄せた一点差し）
+ * WHY 生成りクリームをやめたか: AI テンプレ（warm cream + terracotta）に寄りやすいため。
+ * WHY 紫グラデを使わないか: 同じく生成 AI UI の常套。差し色は一色だけ・低彩度。
  *
- * 構造:
- *   @theme       — Tailwind ユーティリティ化するパレット & フォント
- *   @layer base  — セマンティックトークン / ダーク上書き / ベーススタイル
- *   @layer utilities — badge-* / focus-ai などカスタムユーティリティ
- *
- * フォント外部読み込みなし:
- *   COEP: credentialless 下での Google Fonts クロスオリジン制約を避けるため、
- *   システムスタックのみ（Noto Sans JP / Hiragino / Yu Gothic / Meiryo）。
- *   ユーザー端末に日本語フォントが常駐しているため品質は実用上十分。
- *
- * 差し色を藍(ai-iro)に選んだ理由:
- *   - 知的・落ち着き・チェス駒の青系と親和する
- *   - 朱(vermilion)より「思考・学び」の世界観に合致する
- *   - 一色だけ使うことでテンプレ感を排除し、余白と組み合わせて品を出す
+ * フォント: COEP 下で外部 CDN を使わず、端末の明朝を display・ゴシックを本文に。
  */
 
 @theme {
-  /* ── 日本語優先フォントスタック ── */
   --font-sans:
-    'Noto Sans JP', 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Yu Gothic UI',
+    'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', 'Yu Gothic UI', 'Yu Gothic',
     'Meiryo', system-ui, sans-serif;
+  --font-display:
+    'Hiragino Mincho ProN', 'Hiragino Mincho', 'Yu Mincho', 'Noto Serif JP', 'MS PMincho', serif;
 
-  /* ── 和紙 (washi) — ライト背景基調 ── */
-  --color-washi: #f7f3ea; /* メイン背景: 温かみのある生成り */
-  --color-washi-dim: #ede8db; /* 一段下がったサーフェス */
-  --color-washi-muted: #d4cbb8; /* ボーダー・区切り */
+  --color-ink: #14161a;
+  --color-paper: #f3f4f6;
+  --color-paper-2: #e8eaee;
+  --color-line: #d2d6de;
 
-  /* ── 炭 / 墨 (sumi) — ダーク地 & インクテキスト ── */
-  --color-sumi: #1e1a17; /* ダーク背景 */
-  --color-sumi-surface: #272320; /* ダークサーフェス */
-  --color-sumi-border: #3a3530; /* ダークボーダー */
-  --color-sumi-ink: #2c2622; /* ライト時プライマリテキスト */
-  --color-sumi-mid: #706860; /* セカンダリテキスト */
-  --color-sumi-faint: #9e9288; /* ヒント・プレースホルダ */
+  --color-sumi: #12141a;
+  --color-sumi-surface: #1c1f27;
+  --color-sumi-border: #2c3140;
+  --color-sumi-ink: #1a1d24;
+  --color-sumi-mid: #5c6578;
+  --color-sumi-faint: #8b93a7;
 
-  /* ── 藍 (ai-iro / 日本インディゴ) — 一点差し色 ──
-     light: #3b5ea6 with white → 5.68:1 (AA ✓)
-     dark:  #4565a0 with white → 5.25:1 (AA ✓)  ← 4.5:1 要件を満たす最も明るい藍
-     text-dark: #8aaad4 on sumi → 7.98:1 (AAA ✓)                              */
-  --color-ai: #3b5ea6; /* ライト差し色 */
-  --color-ai-bg: #eef2fa; /* 差し色サーフェス(ライト) */
-  --color-ai-hover: #2d4a8a; /* ホバー/押下 */
-  --color-ai-dim: #4565a0; /* ダーク時フィルドボタン bg (白文字 5.25:1) */
-  --color-ai-muted: #8aaad4; /* ダーク時テキスト・サブアクセント */
-  --color-ai-deep: #192540; /* ダーク時差し色サーフェス */
+  /* 互換: 旧 washi 名を参照する箇所向け（紙白へマップ） */
+  --color-washi: #f3f4f6;
+  --color-washi-dim: #e8eaee;
+  --color-washi-muted: #d2d6de;
 
-  /* ── 影トークン ──
-     カードの浮遊感・ボタンの立体感を出す。ライト/ダーク共通で極めて控えめな値を選んだ。
-     WHY この透明度か:
-       card: 6%/4% — 和紙の温かみに馴染む最小限の奥行き。強くすると「事務的なドロップシャドウ」になる。
-       btn:  14%   — 藍ボタンの上でも自然に感じる立体感。押せる感を出す最小値。
-       card-hover: 9%/5% — card の1.5倍。ホバー時に「1段浮いた」と感じさせる増幅量。
-     Tailwind v4 では --shadow-* を @theme に置くと shadow-* ユーティリティが自動生成される。   */
-  --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.04);
-  --shadow-btn: 0 1px 4px 0 rgb(0 0 0 / 0.14);
-  --shadow-card-hover: 0 4px 12px 0 rgb(0 0 0 / 0.09), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  /* 差し色 — 盤のフェルト緑（白文字 4.5:1 以上） */
+  --color-ai: #1f6b56;
+  --color-ai-bg: #e6f2ee;
+  --color-ai-hover: #185544;
+  --color-ai-dim: #2a7d66;
+  --color-ai-muted: #7eb9a6;
+  --color-ai-deep: #0f2e26;
 
-  /* ── セマンティックエイリアス ──
-     @layer base の dark 上書きで自動切替。
-     bg-surface / text-on-surface / border-border / text-muted / text-subtle で使う。 */
-  --color-surface: #f7f3ea;
-  --color-surface-2: #ede8db;
-  --color-on-surface: #2c2622;
-  --color-border: #d4cbb8;
-  --color-muted: #706860;
-  --color-subtle: #9e9288;
+  --shadow-card: 0 1px 2px 0 rgb(20 22 26 / 0.04), 0 1px 1px -1px rgb(20 22 26 / 0.03);
+  --shadow-btn: 0 1px 3px 0 rgb(31 107 86 / 0.28);
+  --shadow-card-hover: 0 10px 28px -12px rgb(20 22 26 / 0.18), 0 2px 6px -2px rgb(20 22 26 / 0.06);
+
+  --color-surface: #f3f4f6;
+  --color-surface-2: #e8eaee;
+  --color-on-surface: #1a1d24;
+  --color-border: #d2d6de;
+  --color-muted: #5c6578;
+  --color-subtle: #8b93a7;
 }
 
 @layer base {
@@ -84,57 +65,51 @@
 
        WHY rgba(): 背景(bg-surface-2)が透けて見えることでグラフと
        カードが一体化して見える。不透明にすると浮いて見える。         */
-    --graph-white-fill: rgba(247, 243, 234, 0.85); /* washi 薄め: 白優勢エリア */
-    --graph-black-fill: rgba(44, 38, 34, 0.55); /* sumi-ink 薄め: 黒優勢エリア */
-    --graph-line: #3b5ea6; /* ai-iro(藍): 評価折れ線 */
-    --graph-zero: #d4cbb8; /* washi-muted: 互角ライン */
-    --graph-marker: #3b5ea6; /* ai-iro: 現在手マーカー */
+    --graph-white-fill: rgba(243, 244, 246, 0.88);
+    --graph-black-fill: rgba(26, 29, 36, 0.55);
+    --graph-line: #1f6b56;
+    --graph-zero: #d2d6de;
+    --graph-marker: #1f6b56;
 
-    /* ── 手の質バッジ — ライトモード ──
-       色相は lichess 準拠(best=青, good=緑, inaccuracy=黄, mistake=橙, blunder=赤)、
-       彩度を和紙の世界観に落としてテンプレ感を消す。
-       WHY CSS変数: ライト/ダーク切替を badge-* クラスだけで完結させ
-       コンポーネント側に dark: 分岐を書かなくてよくする。               */
-    --q-best-bg: #eef2fa; /* 藍 tint */
-    --q-best-fg: #2d4a8a;
-    --q-good-bg: #eaf1ec; /* 緑青(rokushō) tint */
+    --q-best-bg: #e6f2ee;
+    --q-best-fg: #185544;
+    --q-good-bg: #e8f0ea;
     --q-good-fg: #2a6044;
-    --q-inac-bg: #f7f2df; /* 黄土(ōdo) tint */
-    --q-inac-fg: #7a5c00;
-    --q-miss-bg: #f7ece0; /* 柿(kaki) tint */
+    --q-inac-bg: #f5f0df;
+    --q-inac-fg: #6b5200;
+    --q-miss-bg: #f5ebe3;
     --q-miss-fg: #8c3e10;
-    --q-blnd-bg: #f7e0de; /* 朱(shu) tint */
+    --q-blnd-bg: #f5e3e1;
     --q-blnd-fg: #882018;
+
+    --app-glow:
+      radial-gradient(1200px 480px at 12% -10%, rgb(31 107 86 / 0.09), transparent 55%),
+      radial-gradient(900px 420px at 92% 0%, rgb(20 22 26 / 0.05), transparent 50%);
   }
 
   @media (prefers-color-scheme: dark) {
     :root {
-      /* ── 評価グラフ — ダーク上書き ──
-         SVG は Tailwind の bg-xx や text-xx が届かないため CSS 変数を直接参照する。
-         ライトモードの値は :root で設定済み。ダークで上書きする。       */
-      --graph-white-fill: rgba(58, 53, 48, 0.7); /* sumi-border tint: 背景より少し明るい */
-      --graph-black-fill: rgba(8, 6, 4, 0.85); /* near-black: 背景より暗く押さえる */
-      --graph-line: #8aaad4; /* ai-muted: ダーク時は明るい藍 */
-      --graph-zero: #3a3530; /* sumi-border */
-      --graph-marker: #8aaad4;
+      --graph-white-fill: rgba(44, 49, 64, 0.7);
+      --graph-black-fill: rgba(6, 8, 12, 0.88);
+      --graph-line: #7eb9a6;
+      --graph-zero: #2c3140;
+      --graph-marker: #7eb9a6;
 
-      /* セマンティックトークン — ダーク上書き */
-      --color-surface: #1e1a17;
-      --color-surface-2: #272320;
-      --color-on-surface: #f0ece4; /* 温かみのある off-white テキスト */
-      --color-border: #3a3530;
-      --color-muted: #9e9288;
-      --color-subtle: #706860;
+      --color-surface: #12141a;
+      --color-surface-2: #1c1f27;
+      --color-on-surface: #eceef3;
+      --color-border: #2c3140;
+      --color-muted: #8b93a7;
+      --color-subtle: #5c6578;
+      --color-ink: #eceef3;
 
-      /* 藍 — ダーク上書き */
-      --color-ai: #4565a0; /* フィルドボタン bg(白文字 5.25:1) */
-      --color-ai-bg: #192540; /* 差し色サーフェス */
-      --color-ai-hover: #3b5ea6; /* ホバー(ライト値に戻す→より明るく見せる) */
-      --color-ai-muted: #8aaad4; /* テキスト・アイコン */
+      --color-ai: #2a7d66;
+      --color-ai-bg: #0f2e26;
+      --color-ai-hover: #34957a;
+      --color-ai-muted: #7eb9a6;
 
-      /* 手の質バッジ — ダークモード */
-      --q-best-bg: #1a2845;
-      --q-best-fg: #8aaad4;
+      --q-best-bg: #0f2e26;
+      --q-best-fg: #7eb9a6;
       --q-good-bg: #0f2a1c;
       --q-good-fg: #78b898;
       --q-inac-bg: #251c00;
@@ -143,6 +118,10 @@
       --q-miss-fg: #d4844a;
       --q-blnd-bg: #2a0c0a;
       --q-blnd-fg: #d46c66;
+
+      --app-glow:
+        radial-gradient(1000px 420px at 10% -8%, rgb(42 125 102 / 0.16), transparent 55%),
+        radial-gradient(800px 360px at 90% 0%, rgb(236 238 243 / 0.04), transparent 50%);
     }
   }
 
@@ -164,9 +143,37 @@
   body {
     margin: 0;
     font-family: var(--font-sans);
-    /* 日本語フォントのサブピクセルアンチエイリアス */
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    background-color: var(--color-surface);
+    background-image: var(--app-glow);
+    background-attachment: fixed;
+  }
+
+  .font-display {
+    font-family: var(--font-display);
+  }
+
+  @keyframes sheet-up {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes fade-rise {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 }
 

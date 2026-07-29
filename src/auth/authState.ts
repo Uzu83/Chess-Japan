@@ -22,8 +22,15 @@ export interface AuthState {
   signInWithApple: () => Promise<void>;
   /** メール+パスワード。signup は確認メール待ちの場合 signedIn にしない。 */
   signInWithEmailPassword: (email: string, password: string, mode: EmailAuthMode) => Promise<void>;
-  /** マジックリンク / OTP メール送信。 */
+  /** マジックリンク / OTP メール送信（パスワード無しログイン）。 */
   signInWithEmailOtp: (email: string) => Promise<{ sent: true }>;
+  /** パスワード再設定メール（リンク後に updatePassword）。 */
+  resetPassword: (email: string) => Promise<{ sent: true }>;
+  /** recovery セッション後の新パスワード設定。 */
+  updatePassword: (password: string) => Promise<void>;
+  /** パスワード再設定 UI を出すか（PASSWORD_RECOVERY）。 */
+  passwordRecoveryPending: boolean;
+  clearPasswordRecovery: () => void;
   signOut: () => Promise<void>;
   /** オンボーディングの確定。成功時は profile が更新される。 */
   submitInitialRating: (rating: number, source: RatingSource) => Promise<void>;
@@ -44,6 +51,10 @@ export const disabledState: AuthState = {
   signInWithApple: async () => {},
   signInWithEmailPassword: async () => {},
   signInWithEmailOtp: async () => ({ sent: true as const }),
+  resetPassword: async () => ({ sent: true as const }),
+  updatePassword: async () => {},
+  passwordRecoveryPending: false,
+  clearPasswordRecovery: () => {},
   signOut: async () => {},
   submitInitialRating: async () => {},
   refreshProfile: async () => {},
