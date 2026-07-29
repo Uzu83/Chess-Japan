@@ -220,10 +220,15 @@ async function handleEvent(type: string, obj: Record<string, unknown>): Promise<
       return;
     }
     const userId = profile.id;
-    const eventSubId = typeof obj.id === 'string' ? obj.id : null;
-    // invoice は subscription フィールドを持つことがある
-    const invoiceSubId = typeof obj.subscription === 'string' ? obj.subscription : null;
-    const subId = eventSubId ?? invoiceSubId;
+    // subscription.* → obj.id が sub_…。invoice.* → obj.subscription が sub_…（obj.id は in_…）。
+    const subId =
+      type === 'invoice.payment_failed'
+        ? typeof obj.subscription === 'string'
+          ? obj.subscription
+          : null
+        : typeof obj.id === 'string'
+          ? obj.id
+          : null;
 
     // 別サブスクの古いイベントで現契約を壊さない
     if (
