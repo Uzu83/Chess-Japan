@@ -5,6 +5,7 @@
  * Pro 契約中は Stripe サブを Edge 側で best-effort キャンセル。
  */
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { deleteMyAccount } from '../auth/accountDelete';
 import { useAuth } from '../auth/authState';
 
@@ -33,8 +34,9 @@ export function DeleteAccountDialog({ open, onClose }: { open: boolean; onClose:
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+  // AuthButton は sticky+blur ヘッダー内 → body へ出さないと fixed がヘッダーに閉じ込められる。
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto p-4 py-8">
       <button
         type="button"
         aria-label="閉じる"
@@ -90,6 +92,7 @@ export function DeleteAccountDialog({ open, onClose }: { open: boolean; onClose:
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

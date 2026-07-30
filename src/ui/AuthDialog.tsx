@@ -5,6 +5,7 @@
  * パスキー・Manual Linking は出さない（後続）。
  */
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth } from '../auth/authState';
 import type { EmailAuthMode } from '../auth/authState';
 
@@ -47,15 +48,15 @@ export function AuthDialog({ open, onClose }: { open: boolean; onClose: () => vo
     }
   };
 
-  return (
-    // WHY overflow-y-auto + min-h-full: 高さのあるダイアログを items-center だけにすると
-    // 上端がビューポート外に出て切れる。親をスクロール可能にして中央寄せする。
-    <div className="fixed inset-0 z-50 overflow-y-auto overscroll-contain">
+  // WHY createPortal(body): AuthButton は sticky + backdrop-blur ヘッダー内。
+  // その祖先があると fixed がヘッダー基準になり「画面上端に張り付く／本文の裏に回る」。
+  return createPortal(
+    <div className="fixed inset-0 z-[100] overflow-y-auto overscroll-contain">
       <div className="flex min-h-full items-center justify-center p-4 py-8">
         <button
           type="button"
           aria-label="閉じる"
-          className="fixed inset-0 bg-[color:color-mix(in_oklab,var(--color-ink)_50%,transparent)] backdrop-blur-[3px] transition-opacity"
+          className="absolute inset-0 bg-[color:color-mix(in_oklab,var(--color-ink)_50%,transparent)] backdrop-blur-[3px]"
           onClick={onClose}
         />
         <div
@@ -252,6 +253,7 @@ export function AuthDialog({ open, onClose }: { open: boolean; onClose: () => vo
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
