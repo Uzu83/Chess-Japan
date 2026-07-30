@@ -852,8 +852,7 @@ function SetupScreen({
               元の text-base font-semibold より一段上げることで「入口」感を出す。 */}
           <h2 className="text-lg font-bold text-on-surface">AI と対局</h2>
           <p className="mt-1 text-xs text-muted">
-            ローカルの Stockfish と対局します。指した対局はこの端末に履歴として保存され、
-            あとから1手ずつ振り返れます。
+            ブラウザ上のAI（Stockfish）と対局します。棋譜はこの端末に残り、あとから1手ずつ振り返れます。
           </p>
           {/* あなたのレート(ローカル内部レート)。レート戦の実績がまだ無くても初期値を見せて
               「レートが動く体験」への期待を作る。 */}
