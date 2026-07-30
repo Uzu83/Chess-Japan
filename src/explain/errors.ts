@@ -12,7 +12,7 @@ const BODY_JA: Record<string, string> = {
     '本日の解説回数の上限に達しました。明日またお試しください（Pro で枠が広がります）',
   'deep monthly quota exceeded': '今月の深掘り解説の上限（30回）に達しました',
   'pro required for deep explain':
-    '深掘り解説は Pro プラン限定です。ヘッダーの Pro から登録できます',
+    '深掘り解説は Pro（月額 ¥480）限定です。個人レッスン1回分より気軽に始められます — ヘッダーの Pro から',
   'rate limiter unavailable':
     '混雑のため一時的に利用できません。しばらくしてから再試行してください',
   'turnstile failed':

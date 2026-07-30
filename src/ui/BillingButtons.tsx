@@ -1,16 +1,18 @@
 /**
  * BillingButtons — ヘッダーの Pro アップグレード / サブスク管理
  *
- * Stripe Checkout / Portal は hosted。ここではリダイレクトするだけ。
+ * Pro はいきなり Checkout せず、相場比較つきダイアログを挟む（納得→開始）。
  */
 import { useState } from 'react';
 import { useAuth } from '../auth/authState';
 import { isBillingConfigured, openCustomerPortal, startCheckout } from '../billing/client';
+import { ProUpgradeDialog } from './ProUpgradeDialog';
 
 export function BillingButtons() {
   const { status, profile } = useAuth();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
 
   if (!isBillingConfigured()) return null;
   if (status !== 'signedIn') return null;
@@ -25,7 +27,6 @@ export function BillingButtons() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
-      // 成功時は Stripe へ遷移するため実質到達しないが、失敗・例外時の busy 固着を防ぐ。
       setBusy(false);
     }
   };
@@ -36,7 +37,7 @@ export function BillingButtons() {
         <button
           type="button"
           disabled={busy}
-          className="focus-ai rounded border border-outline px-3 py-1 text-sm text-on-surface transition-colors hover:bg-surface-container disabled:opacity-50"
+          className="focus-ai rounded-xl border border-border px-3 py-1 text-sm text-on-surface transition-colors hover:border-ai disabled:opacity-50"
           onClick={() => void run(openCustomerPortal)}
         >
           サブスク管理
@@ -45,18 +46,31 @@ export function BillingButtons() {
         <button
           type="button"
           disabled={busy}
-          className="focus-ai rounded border border-ai px-3 py-1 text-sm font-medium text-ai transition-colors hover:bg-ai hover:text-white disabled:opacity-50 dark:hover:bg-ai-dim"
-          onClick={() => void run(startCheckout)}
-          title="月額 ¥480（Flash 厚枠 + 深掘り月30回）"
+          className="focus-ai rounded-xl border border-ai px-3 py-1 text-sm font-medium text-ai transition-colors hover:bg-ai hover:text-white disabled:opacity-50"
+          onClick={() => setUpgradeOpen(true)}
+          title="月額 ¥480 — 個人レッスン1回より気軽に"
         >
           Pro
         </button>
       )}
       {err && (
-        <span className="max-w-[14rem] text-xs leading-snug text-error sm:max-w-xs" title={err}>
+        <span
+          className="max-w-[14rem] text-xs leading-snug text-[var(--q-blnd-fg)] sm:max-w-xs"
+          title={err}
+        >
           {err}
         </span>
       )}
+      <ProUpgradeDialog
+        open={upgradeOpen}
+        onClose={() => setUpgradeOpen(false)}
+        busy={busy}
+        onConfirm={() => {
+          void run(async () => {
+            await startCheckout();
+          });
+        }}
+      />
     </span>
   );
 }
