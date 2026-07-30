@@ -708,8 +708,7 @@ function ShogiSetupScreen({
           </span>
           <h2 className="text-lg font-bold text-on-surface">やねうら王と対局</h2>
           <p className="mt-1 text-xs text-muted">
-            ローカルのやねうら王（水匠）と対局します。指した対局はこの端末に履歴として保存され、
-            あとから1手ずつ振り返れます。
+            ブラウザ上のAI（やねうら王／水匠）と対局します。棋譜はこの端末に残り、あとから1手ずつ振り返れます。
           </p>
           <p className="mt-2 text-sm">
             <span className="text-muted">あなたのレート（将棋）: </span>
