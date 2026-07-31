@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { ExplanationContext, GameKind } from '../core/types';
 import { qualityLabelJa } from '../core/classify';
 import { uciToSan, uciLineToSan } from '../core/notation';
+import { isProRequiredExplainMessage } from '../explain/errors';
 import { evalLabel } from './evalLabel';
 
 /*
@@ -56,6 +57,8 @@ interface ExplanationPanelProps {
    */
   actionError?: string | null;
   onDismissActionError?: () => void;
+  /** Pro 未加入時の深掘り誘導。Billing 未設定や既に Pro なら渡さない。 */
+  onRequestPro?: () => void;
 }
 
 /** 解説テキストがエラーメッセージかどうかを判定。 */
@@ -156,6 +159,7 @@ export function ExplanationPanel({
   isPro = false,
   actionError = null,
   onDismissActionError,
+  onRequestPro,
 }: ExplanationPanelProps) {
   const [q, setQ] = useState('');
 
@@ -173,6 +177,10 @@ export function ExplanationPanel({
 
   const hasExplanation = Boolean(explanation);
   const showError = hasExplanation && isError(explanation!);
+  const actionNeedsPro = Boolean(actionError && isProRequiredExplainMessage(actionError));
+  const errorNeedsPro = Boolean(
+    showError && explanation && isProRequiredExplainMessage(errorDetail(explanation)),
+  );
 
   /*
    * ── 最善手の SAN 化と「なぜ良いか」素材 ──────────────────────
@@ -261,12 +269,18 @@ export function ExplanationPanel({
           </button>
           <button
             type="button"
-            onClick={() => onExplain('deep')}
+            onClick={() => {
+              if (!isPro && onRequestPro) {
+                onRequestPro();
+                return;
+              }
+              onExplain('deep');
+            }}
             disabled={busy}
             title={
               isPro
                 ? 'より詳しい深掘り解説（月30回まで）'
-                : 'Pro プラン限定。未登録でも押すと案内が表示されます'
+                : 'Pro プラン限定。押すと月額の案内が表示されます'
             }
             className="focus-ai rounded-lg border border-ai px-3 py-1.5 text-xs font-medium text-ai transition-colors hover:bg-ai-bg disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-ai-deep"
           >
@@ -292,15 +306,27 @@ export function ExplanationPanel({
         >
           <p className="font-medium">解説を取得できませんでした</p>
           <p className="mt-1 text-xs opacity-80">{errorDetail(explanation!)}</p>
-          <button
-            type="button"
-            onClick={() => onExplain('standard')}
-            disabled={busy}
-            className="focus-ai mt-2 min-h-9 rounded-lg border px-3 text-xs font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
-            style={{ borderColor: 'var(--q-miss-fg)', color: 'var(--q-miss-fg)' }}
-          >
-            再試行
-          </button>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {errorNeedsPro && onRequestPro ? (
+              <button
+                type="button"
+                onClick={onRequestPro}
+                className="focus-ai min-h-9 rounded-lg bg-ai px-3 text-xs font-medium text-white transition-colors hover:bg-ai-hover dark:bg-ai-dim dark:hover:bg-ai"
+              >
+                Pro の案内を見る
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onExplain('standard')}
+                disabled={busy}
+                className="focus-ai min-h-9 rounded-lg border px-3 text-xs font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
+                style={{ borderColor: 'var(--q-miss-fg)', color: 'var(--q-miss-fg)' }}
+              >
+                再試行
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         /* 状態 4: 解説あり — 深掘りで上書き再取得も可能 */
@@ -333,20 +359,38 @@ export function ExplanationPanel({
               }}
             >
               <p>{actionError}</p>
-              {onDismissActionError && (
-                <button
-                  type="button"
-                  className="mt-1 underline opacity-80 hover:opacity-100"
-                  onClick={onDismissActionError}
-                >
-                  閉じる
-                </button>
-              )}
+              <div className="mt-1.5 flex flex-wrap items-center gap-3">
+                {actionNeedsPro && onRequestPro && (
+                  <button
+                    type="button"
+                    onClick={onRequestPro}
+                    className="font-medium underline underline-offset-2 opacity-95 hover:opacity-100"
+                  >
+                    Pro の案内を見る
+                  </button>
+                )}
+                {onDismissActionError && (
+                  <button
+                    type="button"
+                    className="underline opacity-80 hover:opacity-100"
+                    onClick={onDismissActionError}
+                  >
+                    閉じる
+                  </button>
+                )}
+              </div>
             </div>
           )}
           <button
             type="button"
-            onClick={() => onExplain('deep')}
+            onClick={() => {
+              // 未加入で案内コールバックがあるなら、無駄な 402 を踏まずダイアログを先に出す。
+              if (!isPro && onRequestPro) {
+                onRequestPro();
+                return;
+              }
+              onExplain('deep');
+            }}
             disabled={busy}
             title={
               isPro ? '同じ手を深掘りモデルで再解説（月30回まで）' : 'Pro プラン限定の深掘り解説'

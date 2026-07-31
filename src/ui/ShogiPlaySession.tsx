@@ -1089,6 +1089,28 @@ function ShogiMoveList({ moves }: { moves: ShogiPlaySnapshot['history'] }) {
   );
 }
 
+/** 対局日時の短い表示（履歴カード用）。 */
+function formatPlayedAt(ts: number): string {
+  return new Date(ts).toLocaleString('ja-JP', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+/** 棋譜テキストをローカルに保存（KIF）。 */
+function downloadGameText(filename: string, text: string) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 /** 過去の将棋対局の履歴一覧（振り返る/削除）。 */
 function ShogiGameHistory({
   history,
@@ -1110,9 +1132,12 @@ function ShogiGameHistory({
     <div className="rounded-2xl border border-border bg-surface-2 p-4 shadow-card">
       <h2 className="text-sm font-semibold text-on-surface">将棋の対局履歴</h2>
       {history.length === 0 ? (
-        <p className="mt-2 text-xs text-subtle">
-          まだ将棋の対局がありません。左で設定して「対局開始」を押してください。
-        </p>
+        <div className="mt-3 rounded-xl border border-dashed border-border bg-surface px-3 py-4">
+          <p className="text-sm font-medium text-on-surface">まだ将棋の対局がありません</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            左で手番と強さを選んで「対局開始」。終わったらここに残り、「振り返る」からミスを解説できます。
+          </p>
+        </div>
       ) : (
         <ul className="mt-3 flex flex-col gap-2">
           {history.map((g) => {
@@ -1123,12 +1148,15 @@ function ShogiGameHistory({
                 className="flex items-center gap-2 rounded-lg border border-border bg-surface p-2.5 shadow-card"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className={`text-sm font-semibold ${badge.cls}`}>{badge.label}</span>
                     <span className="truncate text-xs text-muted">
                       {g.opponent}・{g.youColor === 'white' ? '先手' : '後手'}・{g.moveCount}手
                     </span>
                   </div>
+                  <p className="mt-0.5 text-[11px] tabular-nums text-subtle">
+                    {formatPlayedAt(g.createdAt)}
+                  </p>
                 </div>
                 <button
                   type="button"
@@ -1136,6 +1164,15 @@ function ShogiGameHistory({
                   className="focus-ai flex min-h-11 shrink-0 items-center rounded border border-border px-2.5 text-xs text-muted transition-colors hover:border-ai hover:text-ai"
                 >
                   振り返る
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadGameText(`chess-japan-${g.id.slice(0, 8)}.kif`, g.pgn)}
+                  aria-label="KIFをダウンロード"
+                  title="KIFを保存"
+                  className="focus-ai flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded border border-border text-xs text-subtle transition-colors hover:border-ai hover:text-ai"
+                >
+                  ↓
                 </button>
                 <button
                   type="button"
