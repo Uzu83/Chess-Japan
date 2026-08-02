@@ -5,15 +5,16 @@
 //   body: { confirm: "DELETE" }
 //
 // 流れ:
-//   1. JWT 検証（本人のみ）
+//   1. JWT 検証（本人のみ）+ 発行からの経過が短いこと（再認証相当・盗難 JWT 対策）
 //   2. 確認フレーズ必須（誤タップ防止）
-//   3. 有効 Stripe サブがあれば即時キャンセル（best-effort・失敗でも退会は続行）
+//   3. 有効 Stripe サブがあれば即時キャンセル（失敗時は退会しない = fail-closed）
 //   4. GoTrue admin deleteUser → profiles は ON DELETE CASCADE
 //
 // 【不変】クライアントに service_role を渡さない。profiles DELETE GRANT も足さない。
 
 import { getAuthUser } from '../_shared/authUser.ts';
 import { resolveCors } from '../_shared/cors.ts';
+import { isJwtFresh } from '../_shared/jwtClaims.ts';
 import { rateCheck } from '../_shared/rateCheck.ts';
 import { readBodyCapped } from '../_shared/readBodyCapped.ts';
 import { assertStripeSecretKey, stripeRequest } from '../_shared/stripeHttp.ts';
@@ -27,6 +28,8 @@ const IS_HOSTED = Boolean(Deno.env.get('SB_EXECUTION_ID') || Deno.env.get('DENO_
 
 const RATE_PER_DAY = Number(Deno.env.get('ACCOUNT_DELETE_RATE_PER_DAY') ?? '3');
 const RATE_PER_MIN_IP = Number(Deno.env.get('ACCOUNT_DELETE_RATE_PER_MIN_IP') ?? '5');
+/** 退会に使う JWT の最大年齢（秒）。既定 10 分 — 長寿命セッションの盗難で即退会させない。 */
+const MAX_JWT_AGE_SEC = Number(Deno.env.get('ACCOUNT_DELETE_MAX_JWT_AGE_SEC') ?? '600');
 const MAX_BODY = 4_096;
 
 const ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') ?? '')
@@ -56,6 +59,9 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: 'service unavailable' }), { status: 503, headers });
   }
 
+  const authHeader = req.headers.get('authorization') ?? '';
+  const bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';
+
   const user = await getAuthUser(req, {
     supabaseUrl: SUPABASE_URL,
     anonKey: ANON_KEY,
@@ -63,6 +69,10 @@ Deno.serve(async (req) => {
   });
   if (!user) {
     return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers });
+  }
+  // H3: 有効 JWT でも古いセッションだけでは退会不可。再ログインで新しい iat を得る。
+  if (!bearer || !isJwtFresh(bearer, MAX_JWT_AGE_SEC)) {
+    return new Response(JSON.stringify({ error: 'reauth required' }), { status: 403, headers });
   }
 
   const ip = clientIp(req);
@@ -99,22 +109,38 @@ Deno.serve(async (req) => {
     });
   }
 
-  // Stripe サブ解約は best-effort。課金キー未設定でも退会自体は通す。
-  try {
-    const stripeSecret = assertStripeSecretKey(
-      Deno.env.get('STRIPE_SECRET_KEY') ?? undefined,
-      Deno.env.get('STRIPE_ALLOW_LIVE') === '1',
-    );
-    const billing = await fetchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, user.id);
-    const subId = billing?.stripe_subscription_id;
-    if (subId && typeof subId === 'string' && subId.startsWith('sub_')) {
+  // Stripe 解約は fail-closed: サブが残ったままユーザー削除すると webhook が迷子になり課金継続しうる。
+  const billing = await fetchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, user.id);
+  const subId = billing?.stripe_subscription_id;
+  const hasBillingInterest =
+    Boolean(subId && subId.startsWith('sub_')) ||
+    billing?.stripe_status === 'active' ||
+    billing?.stripe_status === 'past_due' ||
+    billing?.plan === 'pro';
+
+  if (hasBillingInterest) {
+    if (!subId || !subId.startsWith('sub_')) {
+      return new Response(JSON.stringify({ error: 'subscription cancel required' }), {
+        status: 409,
+        headers,
+      });
+    }
+    try {
+      const stripeSecret = assertStripeSecretKey(
+        Deno.env.get('STRIPE_SECRET_KEY') ?? undefined,
+        Deno.env.get('STRIPE_ALLOW_LIVE') === '1',
+      );
       await stripeRequest(stripeSecret, 'DELETE', `/subscriptions/${encodeURIComponent(subId)}`, {
         invoice_now: 'false',
         prorate: 'true',
       });
+    } catch (e) {
+      console.error('account-delete stripe cancel failed', e instanceof Error ? e.name : 'error');
+      return new Response(JSON.stringify({ error: 'subscription cancel failed' }), {
+        status: 502,
+        headers,
+      });
     }
-  } catch (e) {
-    console.error('account-delete stripe cancel skipped', e instanceof Error ? e.name : 'error');
   }
 
   const del = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(user.id)}`, {

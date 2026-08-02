@@ -2,7 +2,8 @@
  * DeleteAccountDialog.tsx — 退会確認
  *
  * 誤タップ防止: 入力欄に DELETE と打たないと実行できない。
- * Pro 契約中は Stripe サブを Edge 側で best-effort キャンセル。
+ * Pro 契約中は Stripe サブを Edge 側でキャンセル（失敗時は退会しない）。
+ * 直近ログイン（JWT 新鮮）が必要 — 古いセッションだけでは退会できない。
  */
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -57,7 +58,7 @@ export function DeleteAccountDialog({ open, onClose }: { open: boolean; onClose:
         </h2>
         <p className="mt-2 text-sm leading-relaxed text-muted">
           プロフィール・クラウド履歴・ログイン情報を削除します。この操作は取り消せません。Pro
-          契約中の場合はサブスクリプションも解約します。
+          契約中の場合は先にサブスクリプションを解約します（解約に失敗したら退会しません）。安全のため、直近でログインし直したセッションでのみ実行できます。
         </p>
         <label className="mt-4 block text-xs text-muted">
           確認のため <span className="font-mono text-on-surface">DELETE</span> と入力

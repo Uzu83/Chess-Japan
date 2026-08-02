@@ -133,11 +133,20 @@ Deno.serve(async (req) => {
       { idempotencyKey: `cj-cust-${user.id}` },
     );
     customerId = customer.id;
-    await patchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, user.id, {
+    // Customer 作成後の profile 保存失敗を握りつぶすと orphan Customer / 二重 Customer の温床。
+    const saved = await patchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, user.id, {
       stripe_customer_id: customerId,
     });
+    if (!saved) {
+      return new Response(JSON.stringify({ error: 'profile update failed' }), {
+        status: 502,
+        headers,
+      });
+    }
   }
 
+  // 冪等キー: 同一 uid+price の連打/二重クリックで Session を増やさない（Stripe 24h キャッシュ）。
+  // 放棄後の再作成も同じ URL に戻るだけで二重課金より安全。
   const session = await stripeRequest<{ url?: string; id: string }>(
     secret,
     'POST',
@@ -155,6 +164,7 @@ Deno.serve(async (req) => {
       locale: 'ja',
       allow_promotion_codes: 'false',
     },
+    { idempotencyKey: `cj-checkout-${user.id}-${priceId}` },
   );
 
   if (!session.url) {
