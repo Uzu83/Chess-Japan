@@ -84,15 +84,19 @@ export async function verifyStripeWebhook(
   // OWASP A04: 異常に巨大な body は署名前に拒否（DoS / パースコスト）。
   if (rawBody.length > 256_000) throw new Error('body too large');
 
-  const parts = Object.fromEntries(
-    sigHeader.split(',').map((p) => {
-      const [k, ...rest] = p.split('=');
-      return [k?.trim() ?? '', rest.join('=')];
-    }),
-  );
-  const timestamp = parts['t'];
-  const v1 = parts['v1'];
-  if (!timestamp || !v1) throw new Error('malformed stripe-signature');
+  // 署名ローテーション中は Stripe-Signature に v1 が複数付く。
+  // Object.fromEntries だと最後の v1 だけ残り、旧 secret 一致が落ちる（監査 M5）。
+  let timestamp: string | undefined;
+  const v1List: string[] = [];
+  for (const part of sigHeader.split(',')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    const k = part.slice(0, eq).trim();
+    const v = part.slice(eq + 1);
+    if (k === 't') timestamp = v;
+    if (k === 'v1' && v) v1List.push(v);
+  }
+  if (!timestamp || v1List.length === 0) throw new Error('malformed stripe-signature');
 
   const ts = Number(timestamp);
   if (!Number.isFinite(ts)) throw new Error('invalid timestamp');
@@ -112,7 +116,7 @@ export async function verifyStripeWebhook(
   );
   const sigBuf = await crypto.subtle.sign('HMAC', mac, new TextEncoder().encode(signedPayload));
   const expected = [...new Uint8Array(sigBuf)].map((b) => b.toString(16).padStart(2, '0')).join('');
-  if (!timingSafeEqualHex(expected, v1)) throw new Error('signature mismatch');
+  if (!v1List.some((v1) => timingSafeEqualHex(expected, v1))) throw new Error('signature mismatch');
 
   const event = JSON.parse(rawBody) as {
     id?: string;
@@ -130,20 +134,45 @@ function timingSafeEqualHex(a: string, b: string): boolean {
   return diff === 0;
 }
 
+export type StripeSubscriptionSnapshot = {
+  id: string;
+  customerId: string | null;
+  status: string | null;
+  priceId: string | null;
+};
+
 /**
- * サブスクリプションの Price ID を Stripe API から取得（webhook の SKU 検証用）。
- * items.data[0].price が string または object の両方に対応。
+ * サブスクリプションの現在状態を Stripe API から取得（webhook の reconcile 用）。
+ * イベント payload の古い snapshot で entitlement を上書きしないための正本。
  */
+export async function fetchSubscriptionSnapshot(
+  secret: string,
+  subscriptionId: string,
+): Promise<StripeSubscriptionSnapshot | null> {
+  if (!subscriptionId.startsWith('sub_')) return null;
+  const sub = await stripeRequest<{
+    id?: string;
+    customer?: string;
+    status?: string;
+    items?: { data?: { price?: string | { id?: string } }[] };
+  }>(secret, 'GET', `/subscriptions/${encodeURIComponent(subscriptionId)}`);
+  const price = sub.items?.data?.[0]?.price;
+  let priceId: string | null = null;
+  if (typeof price === 'string' && price.startsWith('price_')) priceId = price;
+  else if (price && typeof price === 'object' && typeof price.id === 'string') priceId = price.id;
+  return {
+    id: typeof sub.id === 'string' ? sub.id : subscriptionId,
+    customerId: typeof sub.customer === 'string' ? sub.customer : null,
+    status: typeof sub.status === 'string' ? sub.status : null,
+    priceId,
+  };
+}
+
+/** サブスクリプションの Price ID のみ（後方互換ラッパ）。 */
 export async function fetchSubscriptionPriceId(
   secret: string,
   subscriptionId: string,
 ): Promise<string | null> {
-  if (!subscriptionId.startsWith('sub_')) return null;
-  const sub = await stripeRequest<{
-    items?: { data?: { price?: string | { id?: string } }[] };
-  }>(secret, 'GET', `/subscriptions/${encodeURIComponent(subscriptionId)}`);
-  const price = sub.items?.data?.[0]?.price;
-  if (typeof price === 'string' && price.startsWith('price_')) return price;
-  if (price && typeof price === 'object' && typeof price.id === 'string') return price.id;
-  return null;
+  const snap = await fetchSubscriptionSnapshot(secret, subscriptionId);
+  return snap?.priceId ?? null;
 }

@@ -35,8 +35,14 @@ export async function deleteMyAccount(): Promise<void> {
   if (!res.ok) {
     const map: Record<string, string> = {
       unauthorized: 'ログインが必要です',
+      'reauth required':
+        'セキュリティのため、一度ログアウトして再ログインしてから退会してください（直近のログインが必要です）',
       'rate limited': 'しばらく待ってから再度お試しください',
       'confirmation required': '確認フレーズが一致しません',
+      'subscription cancel failed':
+        'Pro の解約に失敗したため退会を中止しました。しばらくしてから再試行するか、サブスク管理から解約してください',
+      'subscription cancel required':
+        '課金情報の整合が取れていないため退会できません。サブスク管理で解約してから再試行してください',
       'delete failed': '退会処理に失敗しました',
       'service unavailable': 'しばらくしてから再度お試しください',
       'origin not allowed': 'この環境からは退会できません',
