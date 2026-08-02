@@ -12,7 +12,7 @@ const BODY_JA: Record<string, string> = {
     '本日の解説回数の上限に達しました。明日またお試しください（Pro で枠が広がります）',
   'deep monthly quota exceeded': '今月の深掘り解説の上限（30回）に達しました',
   'pro required for deep explain':
-    '深掘り解説は Pro（月額 ¥480）限定です。個人レッスン1回分より気軽に始められます — ヘッダーの Pro から',
+    '深掘り解説は Pro（月額 ¥480）限定です。個人レッスン1回分より気軽に始められます',
   'rate limiter unavailable':
     '混雑のため一時的に利用できません。しばらくしてから再試行してください',
   'turnstile failed':
@@ -47,4 +47,13 @@ export function formatExplainApiError(status: number, bodyError?: string | null)
   if (status === 503) return '解説サービスが一時的に利用できません';
   if (status >= 500) return 'サーバー側で問題が発生しました。しばらくしてから再試行してください';
   return `解説の取得に失敗しました（${status}）`;
+}
+
+/** 表示メッセージが深掘り Pro 必須（402）系かどうか。CTA 出し分け用。 */
+export function isProRequiredExplainMessage(message: string): boolean {
+  return (
+    message.includes('pro required for deep explain') ||
+    message.includes('深掘り解説は Pro') ||
+    message.includes('Pro（月額')
+  );
 }

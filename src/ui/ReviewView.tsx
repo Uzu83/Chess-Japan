@@ -14,6 +14,7 @@ import {
 import { useAuth } from '../auth/authState';
 import { setFeedbackBoardContext } from '../feedback/boardContext';
 import { requestExplanation } from '../explain/client';
+import { isProRequiredExplainMessage } from '../explain/errors';
 import {
   hashPgn,
   loadContextsFromStorage,
@@ -23,12 +24,15 @@ import {
   encodeShareParam,
   decodeShareParam,
 } from '../core/storage';
+import { findNextMissIndex } from '../core/missJump';
 import { isAuthConfigured } from '../auth/supabaseClient';
 import { listMyCloudGames, attachUnverifiedAnalysisResult } from '../auth/games';
 import { buildAnalysisPayload } from '../auth/cloudSync';
 import { notifyCloudSyncFailureOnce } from '../auth/cloudSyncNotify';
+import { isBillingConfigured, startCheckout } from '../billing/client';
 import { Board } from './Board';
 import { withMoveLabels, enrichStoredChessContexts } from './moveLabels';
+import { ProUpgradeDialog } from './ProUpgradeDialog';
 
 /*
  * ShogiBoard は将棋タブを開いたときだけ読み込む（React.lazy で code-split）。
@@ -197,6 +201,14 @@ export function ReviewView({
   const isPro = authProfile?.plan === 'pro' && authProfile?.stripe_status === 'active';
   // 深掘り失敗時など、既存の通常解説を消さずに出す一時エラー（ply 付きで手違い表示を防ぐ）。
   const [actionError, setActionError] = useState<{ ply: number; message: string } | null>(null);
+  /** 深掘り 402 などから開く Pro 案内。ヘッダーの BillingButtons と同じ Checkout 経路。 */
+  const [proUpgradeOpen, setProUpgradeOpen] = useState(false);
+  const [proCheckoutBusy, setProCheckoutBusy] = useState(false);
+  /**
+   * 「次のミスへ」直後に標準解説を1回だけ自動要求するフラグ。
+   * setIndex 後に currentContext が揃ってから onExplain するため ref 経由。
+   */
+  const pendingMissExplainRef = useRef(false);
 
   // 共有リンクコピー状態(コピー後 2 秒間フィードバック表示)
   const [shareCopied, setShareCopied] = useState(false);
@@ -721,9 +733,14 @@ export function ReviewView({
         : -currentContext.evalAfter
       : undefined;
 
-  // 手の質マップ(MoveList に渡す)
-  const qualities: Record<number, MoveQuality | undefined> = {};
-  for (const [k, v] of Object.entries(contexts)) qualities[Number(k)] = v.quality;
+  // 手の質マップ(MoveList / 次のミスジャンプに渡す)
+  const qualities = useMemo(() => {
+    const map: Record<number, MoveQuality | undefined> = {};
+    for (const [k, v] of Object.entries(contexts)) map[Number(k)] = v.quality;
+    return map;
+  }, [contexts]);
+
+  const nextMissIndex = useMemo(() => findNextMissIndex(qualities, index), [qualities, index]);
 
   // 精度サマリ計算(解析済みコンテキストが変わるたびに再計算)
   const accuracySummary = useMemo(
@@ -785,6 +802,10 @@ export function ReviewView({
           return { ...prev, [currentPly]: `解説の取得に失敗: ${message}` };
         });
         if (preservedGood) setActionError({ ply: currentPly, message });
+        // 深掘り Pro 必須は案内ダイアログへ直結（ヘッダーを探させない）。
+        if (depth === 'deep' && isProRequiredExplainMessage(message) && isBillingConfigured()) {
+          setProUpgradeOpen(true);
+        }
       } finally {
         setBusy(false);
       }
@@ -794,6 +815,20 @@ export function ReviewView({
 
   // onExplain の最新版を常に ref に同期(自動解説の stale closure 対策)
   onExplainRef.current = onExplain;
+
+  // 「次のミスへ」ジャンプ後: その手の標準解説を自動取得（未取得時のみ）。
+  useEffect(() => {
+    if (!pendingMissExplainRef.current) return;
+    if (!currentContext || busy) return;
+    pendingMissExplainRef.current = false;
+    const existing = explanations[currentPly];
+    const hasGood =
+      typeof existing === 'string' &&
+      existing.length > 0 &&
+      !existing.startsWith('解説の取得に失敗');
+    if (hasGood) return;
+    void onExplain('standard');
+  }, [index, currentContext, currentPly, explanations, busy, onExplain]);
 
   const onAsk = useCallback(
     async (question: string) => {
@@ -1078,6 +1113,36 @@ export function ReviewView({
               onClick={() => setIndex(max)}
               disabled={!model || index === max}
             />
+            {/* 次のミスへ: 解析済みの mistake/blunder にジャンプし、未解説なら標準解説も取る。
+                全手解析後の「まず悪い手を見る」動線。ミス無し時は無効。 */}
+            <button
+              type="button"
+              onClick={() => {
+                if (nextMissIndex === null) return;
+                // 既にその手にいる（ミス1手のみ等）でも未解説なら解説だけ取る。
+                if (nextMissIndex === index) {
+                  const existing = explanations[currentPly];
+                  const hasGood =
+                    typeof existing === 'string' &&
+                    existing.length > 0 &&
+                    !existing.startsWith('解説の取得に失敗');
+                  if (!hasGood && currentContext) void onExplain('standard');
+                  return;
+                }
+                pendingMissExplainRef.current = true;
+                setIndex(nextMissIndex);
+              }}
+              disabled={!model || nextMissIndex === null}
+              aria-label="次のミスまたはポカ手へジャンプし、未解説なら解説する"
+              title={
+                nextMissIndex === null
+                  ? '解析済みのミス・ポカ手がありません（先に「全手を解析」）'
+                  : '次のミスへ（未解説なら解説も取得）'
+              }
+              className="focus-ai ml-1 min-h-11 rounded-lg border border-[color:color-mix(in_oklab,var(--q-miss-fg)_45%,var(--color-border))] px-2.5 text-xs font-medium text-[var(--q-miss-fg)] transition-colors hover:bg-[var(--q-miss-bg)] disabled:opacity-30"
+            >
+              次のミス
+            </button>
             {/* 盤反転ボタン
                 WHY 同じ行に置くか: ナビとセットで使うことが多く、
                 別行に置くよりユーザーが探しやすい。 */}
@@ -1448,10 +1513,32 @@ export function ReviewView({
                 actionError && actionError.ply === currentPly ? actionError.message : null
               }
               onDismissActionError={() => setActionError(null)}
+              onRequestPro={
+                isBillingConfigured() && !isPro ? () => setProUpgradeOpen(true) : undefined
+              }
             />
           </div>
         </aside>
       </div>
+
+      <ProUpgradeDialog
+        open={proUpgradeOpen}
+        onClose={() => setProUpgradeOpen(false)}
+        busy={proCheckoutBusy}
+        onConfirm={() => {
+          void (async () => {
+            setProCheckoutBusy(true);
+            try {
+              await startCheckout();
+            } catch {
+              // Checkout 失敗はダイアログを閉じず再試行可能に。ヘッダー Pro と同様 silent でもよいが、
+              // ここでは busy 解除のみ（Stripe 側のエラー画面へ遷移しない限りメッセージは出ない）。
+            } finally {
+              setProCheckoutBusy(false);
+            }
+          })();
+        }}
+      />
     </div>
   );
 }
