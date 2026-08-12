@@ -14,11 +14,14 @@ export function ProUpgradeDialog({
   onClose,
   onConfirm,
   busy = false,
+  error = null,
 }: {
   open: boolean;
   onClose: () => void;
   onConfirm: () => void;
   busy?: boolean;
+  /** Checkout / Portal 失敗時のユーザー向けメッセージ（BillingButtons と同じ経路）。 */
+  error?: string | null;
 }) {
   if (!open) return null;
 
@@ -99,6 +102,15 @@ export function ProUpgradeDialog({
           <p className="mt-4 text-[11px] leading-relaxed text-subtle">
             人間の先生の対局指導やカリキュラムの代わりではありません。自分の棋譜を、すきま時間で振り返るためのプランです。
           </p>
+
+          {error && (
+            <p
+              role="alert"
+              className="mt-4 rounded-xl border border-[color:color-mix(in_oklab,var(--q-blnd-fg)_35%,var(--color-border))] bg-[var(--q-miss-bg)] px-3 py-2 text-xs leading-snug text-[var(--q-blnd-fg)]"
+            >
+              {error}
+            </p>
+          )}
 
           <button
             type="button"

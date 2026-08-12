@@ -2,13 +2,15 @@
  * AuthButton.tsx — ヘッダー右上のログイン/アカウント UI
  *
  * disabled → 非表示 / anonymous → ログイン / signedIn → メニュー
- * メニューに退会を含む。
+ * メニューに退会を含む。無料ユーザーには Pro 案内（BillingButtons と同じ Checkout 経路）。
  */
 import { useState } from 'react';
 import { useAuth } from '../auth/authState';
+import { isBillingConfigured, startCheckout } from '../billing/client';
 import { loadRating } from '../core/storage';
 import { AuthDialog } from './AuthDialog';
 import { DeleteAccountDialog } from './DeleteAccountDialog';
+import { ProUpgradeDialog } from './ProUpgradeDialog';
 
 export function AuthButton({
   onOpenStrength,
@@ -19,6 +21,9 @@ export function AuthButton({
   const [menuOpen, setMenuOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [billingErr, setBillingErr] = useState<string | null>(null);
 
   if (status === 'disabled') return null;
 
@@ -46,6 +51,20 @@ export function AuthButton({
   const name = profile?.display_name ?? 'プレイヤー';
   const localRating = loadRating();
   const isPro = profile?.plan === 'pro' && profile?.stripe_status === 'active';
+  const showProUpgrade = !isPro && isBillingConfigured();
+
+  const runBilling = async (fn: () => Promise<void>) => {
+    setBillingErr(null);
+    setBillingBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      setBillingErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBillingBusy(false);
+    }
+  };
+
   return (
     <div className="relative">
       <button
@@ -101,7 +120,27 @@ export function AuthButton({
               プラン:{' '}
               <span className="font-semibold text-on-surface">{isPro ? 'Pro' : '無料'}</span>
             </p>
+            {showProUpgrade && (
+              <p className="mt-1 text-[11px] leading-snug text-subtle">
+                深掘り解説は Pro 限定（月額 ¥480）
+              </p>
+            )}
           </div>
+          {showProUpgrade && (
+            <button
+              type="button"
+              role="menuitem"
+              disabled={billingBusy}
+              onClick={() => {
+                setMenuOpen(false);
+                setUpgradeOpen(true);
+              }}
+              className="focus-ai min-h-11 rounded-xl border border-ai px-3 text-left text-sm font-medium text-ai transition hover:bg-ai-bg disabled:opacity-50 dark:hover:bg-ai-deep"
+              title="月額 ¥480 — 個人レッスン1回より気軽に"
+            >
+              Pro にアップグレード
+            </button>
+          )}
           {onOpenStrength && (
             <button
               type="button"
@@ -140,6 +179,22 @@ export function AuthButton({
         </div>
       )}
       <DeleteAccountDialog open={deleteOpen} onClose={() => setDeleteOpen(false)} />
+      {showProUpgrade && (
+        <ProUpgradeDialog
+          open={upgradeOpen}
+          onClose={() => {
+            setUpgradeOpen(false);
+            setBillingErr(null);
+          }}
+          busy={billingBusy}
+          error={billingErr}
+          onConfirm={() => {
+            void runBilling(async () => {
+              await startCheckout();
+            });
+          }}
+        />
+      )}
     </div>
   );
 }
