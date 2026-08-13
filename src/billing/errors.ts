@@ -17,7 +17,18 @@ const BODY_JA: Record<string, string> = {
   'checkout session missing url': '決済ページの作成に失敗しました',
   'no stripe customer': 'サブスク管理の準備ができていません。先に Pro 登録してください',
   'portal session missing url': '管理ページの作成に失敗しました',
+  'portal unavailable': 'サブスク管理を開けませんでした。しばらくしてから再試行してください',
+  'checkout unavailable': '決済ページを開けませんでした。しばらくしてから再試行してください',
 };
+
+/** fetch 自体が落ちたとき（CORS / ネットワーク / Edge 未捕捉 500）。 */
+export function formatBillingNetworkError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/failed to fetch/i.test(msg) || err instanceof TypeError) {
+    return '決済サーバーに接続できませんでした。再読み込みしてから再試行してください';
+  }
+  return msg;
+}
 
 export function formatBillingApiError(status: number, bodyError?: string | null): string {
   const trimmed = bodyError?.trim();

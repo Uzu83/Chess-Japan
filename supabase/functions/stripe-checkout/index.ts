@@ -122,17 +122,25 @@ Deno.serve(async (req) => {
 
   let customerId = profile.stripe_customer_id;
   if (!customerId) {
-    const customer = await stripeRequest<{ id: string }>(
-      secret,
-      'POST',
-      '/customers',
-      {
-        email: user.email ?? undefined,
-        'metadata[supabase_user_id]': user.id,
-      },
-      { idempotencyKey: `cj-cust-${user.id}` },
-    );
-    customerId = customer.id;
+    try {
+      const customer = await stripeRequest<{ id: string }>(
+        secret,
+        'POST',
+        '/customers',
+        {
+          email: user.email ?? undefined,
+          'metadata[supabase_user_id]': user.id,
+        },
+        { idempotencyKey: `cj-cust-${user.id}` },
+      );
+      customerId = customer.id;
+    } catch (e) {
+      console.error('checkout customer', e instanceof Error ? e.name : 'error');
+      return new Response(JSON.stringify({ error: 'checkout unavailable' }), {
+        status: 502,
+        headers,
+      });
+    }
     // Customer 作成後の profile 保存失敗を握りつぶすと orphan Customer / 二重 Customer の温床。
     const saved = await patchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, user.id, {
       stripe_customer_id: customerId,
@@ -147,25 +155,34 @@ Deno.serve(async (req) => {
 
   // 冪等キー: 同一 uid+price の連打/二重クリックで Session を増やさない（Stripe 24h キャッシュ）。
   // 放棄後の再作成も同じ URL に戻るだけで二重課金より安全。
-  const session = await stripeRequest<{ url?: string; id: string }>(
-    secret,
-    'POST',
-    '/checkout/sessions',
-    {
-      mode: 'subscription',
-      customer: customerId,
-      client_reference_id: user.id,
-      'line_items[0][price]': priceId,
-      'line_items[0][quantity]': 1,
-      success_url: `${site}/?billing=success`,
-      cancel_url: `${site}/?billing=cancel`,
-      'subscription_data[metadata][supabase_user_id]': user.id,
-      'metadata[supabase_user_id]': user.id,
-      locale: 'ja',
-      allow_promotion_codes: 'false',
-    },
-    { idempotencyKey: `cj-checkout-${user.id}-${priceId}` },
-  );
+  let session: { url?: string; id: string };
+  try {
+    session = await stripeRequest<{ url?: string; id: string }>(
+      secret,
+      'POST',
+      '/checkout/sessions',
+      {
+        mode: 'subscription',
+        customer: customerId,
+        client_reference_id: user.id,
+        'line_items[0][price]': priceId,
+        'line_items[0][quantity]': 1,
+        success_url: `${site}/?billing=success`,
+        cancel_url: `${site}/?billing=cancel`,
+        'subscription_data[metadata][supabase_user_id]': user.id,
+        'metadata[supabase_user_id]': user.id,
+        locale: 'ja',
+        allow_promotion_codes: 'false',
+      },
+      { idempotencyKey: `cj-checkout-${user.id}-${priceId}` },
+    );
+  } catch (e) {
+    console.error('checkout session', e instanceof Error ? e.name : 'error');
+    return new Response(JSON.stringify({ error: 'checkout unavailable' }), {
+      status: 502,
+      headers,
+    });
+  }
 
   if (!session.url) {
     return new Response(JSON.stringify({ error: 'checkout session missing url' }), {

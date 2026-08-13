@@ -112,10 +112,20 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: 'no stripe customer' }), { status: 400, headers });
   }
 
-  const portal = await stripeRequest<{ url?: string }>(secret, 'POST', '/billing_portal/sessions', {
-    customer: profile.stripe_customer_id,
-    return_url: `${site}/`,
-  });
+  let portal: { url?: string };
+  try {
+    portal = await stripeRequest<{ url?: string }>(secret, 'POST', '/billing_portal/sessions', {
+      customer: profile.stripe_customer_id,
+      return_url: `${site}/`,
+    });
+  } catch (e) {
+    // WHY: 未捕捉だと CORS 無し 500 → ブラウザが Failed to fetch だけ出す
+    console.error('portal session', e instanceof Error ? e.name : 'error');
+    return new Response(JSON.stringify({ error: 'portal unavailable' }), {
+      status: 502,
+      headers,
+    });
+  }
   if (!portal.url) {
     return new Response(JSON.stringify({ error: 'portal session missing url' }), {
       status: 502,
