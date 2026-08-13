@@ -62,6 +62,23 @@ describe('将棋盤 見た目バグ回帰ガード', () => {
       expect(cfg.coordinates?.enabled).toBe(false);
     });
 
+    /*
+     * 2026-08-13 の「駒が空振りする」修正の回帰ガード。
+     * ドラッグを戻すと (1) shogiground 0.10.3 の translateAbs バグでゴーストが固定表示され、
+     * (2) 押した瞬間のドラッグ扱い + 1マス跨ぎで選択が取り消される（空振り）に戻る。
+     * 上流が直るまで false を維持する。理由の全文は shogigroundConfig.ts のコメント。
+     */
+    it('ドラッグは無効（タップ選択のみ。上流のドラッグ表示バグと空振りを避ける）', () => {
+      expect(buildShogiPlayConfig(params).draggable?.enabled).toBe(false);
+    });
+
+    it('選択と行き先表示は有効（CSS の .selected / .dest が出る前提）', () => {
+      const cfg = buildShogiPlayConfig(params);
+      expect(cfg.selectable?.enabled).toBe(true);
+      expect(cfg.movable?.showDests).toBe(true);
+      expect(cfg.droppable?.showDests).toBe(true);
+    });
+
     it('movable=false のとき activeColor を外して盤をロックする', () => {
       expect(buildShogiPlayConfig({ ...params, movable: false }).activeColor).toBeUndefined();
       expect(buildShogiPlayConfig({ ...params, movable: true }).activeColor).toBe('sente');

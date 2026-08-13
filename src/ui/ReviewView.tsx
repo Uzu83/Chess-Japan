@@ -15,6 +15,7 @@ import { useAuth } from '../auth/authState';
 import { setFeedbackBoardContext } from '../feedback/boardContext';
 import { requestExplanation } from '../explain/client';
 import { isProRequiredExplainMessage } from '../explain/errors';
+import { prefetchTurnstileScript } from '../explain/turnstile';
 import {
   hashPgn,
   loadContextsFromStorage,
@@ -766,6 +767,19 @@ export function ReviewView({
       position: fen,
     });
   }, [active, kind, fen]);
+
+  /*
+   * Turnstile スクリプトだけ先に読む（GPT 監査 2026-08-13 P2）。
+   * WHY execute しないか: レビュー入場時点では解説するかわからないし、キャッシュヒットなら
+   *   人間確認は不要。挑戦を先に走らせると押していない人にも右下ウィジェットが出うる。
+   *   script だけ温めておけば、サーバーが turnstile required を返したあとの
+   *   getTurnstileToken() が script 待ちせずに execute できる。
+   * Turnstile 未設定環境では no-op。
+   */
+  useEffect(() => {
+    if (!active) return;
+    prefetchTurnstileScript();
+  }, [active]);
 
   // ── 解説コールバック ─────────────────────────────────────────
 

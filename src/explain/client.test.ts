@@ -7,7 +7,8 @@ import type { ExplainRequest } from './client';
  * getTurnstileToken が script 待ちでハングする。API エラー試験では必ず no-op にする。
  */
 vi.mock('./turnstile', () => ({
-  getTurnstileToken: async () => null,
+  getTurnstileToken: async () => 'fresh-token',
+  takeReadyTurnstileToken: () => null,
   isTurnstileEnabled: () => false,
 }));
 
@@ -62,6 +63,12 @@ describe('explain client (バックエンド未設定)', () => {
   });
 });
 
+/** fetch モックの n 回目の呼び出しに渡したヘッダを取り出す（型の煩雑さをここに閉じ込める）。 */
+function headersOf(mock: { mock: { calls: unknown[][] } }, n: number): Record<string, string> {
+  const init = mock.mock.calls[n]?.[1] as RequestInit | undefined;
+  return (init?.headers ?? {}) as Record<string, string>;
+}
+
 describe('explain client (API エラー)', () => {
   beforeEach(() => {
     vi.stubEnv('VITE_SUPABASE_URL', 'https://example.supabase.co');
@@ -97,5 +104,44 @@ describe('explain client (API エラー)', () => {
       }),
     );
     await expect(requestExplanation(baseReq)).rejects.toThrow(/接続できません/);
+  });
+
+  /*
+   * キャッシュヒットの経路を人間確認で塞がないための不変条件（GPT 監査 2026-08-13 P2）。
+   * 1回目にトークンを付けて投げると、その手前で挑戦が出てキャッシュに到達できない。
+   */
+  it('1回目は人間確認を待たずトークン無しで投げる', async () => {
+    const fetchMock = vi.fn(async () => Response.json({ text: 'キャッシュ済みの解説' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const text = await requestExplanation(baseReq);
+
+    expect(text).toBe('キャッシュ済みの解説');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(headersOf(fetchMock, 0)['x-turnstile-token']).toBeUndefined();
+  });
+
+  it('turnstile required のときだけトークンを取って1回だけ再試行する', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ error: 'turnstile required' }, { status: 403 }))
+      .mockResolvedValueOnce(Response.json({ text: '生成した解説' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const text = await requestExplanation(baseReq);
+
+    expect(text).toBe('生成した解説');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(headersOf(fetchMock, 1)['x-turnstile-token']).toBe('fresh-token');
+  });
+
+  it('再試行しても弾かれたら諦める（無限ループにしない）', async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({ error: 'turnstile failed' }, { status: 403 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(requestExplanation(baseReq)).rejects.toThrow(/ボット/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

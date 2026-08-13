@@ -56,6 +56,13 @@ export function formatExplainApiError(status: number, bodyError?: string | null)
  */
 export function formatExplainNetworkError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
+  /*
+   * 人間確認が未完了のまま時間切れ（turnstile.ts の TOKEN_TIMEOUT_MS）。
+   * 「失敗しました」ではなく **今なにをすればいいか** を書く。無言のスピナーで
+   * ユーザーが固まった実害（本番 QA 2026-08-13）への対処なので、汎用文言に混ぜない。
+   */
+  if (/turnstile timeout/i.test(msg))
+    return '画面右下の「あなたは人間ですか」の確認を完了してください。完了してから再試行すると解説が表示されます';
   if (/turnstile/i.test(msg)) return BODY_JA['turnstile failed']!;
   if (/failed to fetch/i.test(msg) || err instanceof TypeError) {
     return '解説サーバーに接続できませんでした。再読み込みしてから再試行してください';

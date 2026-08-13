@@ -4,6 +4,7 @@
  * WHY env を関数で読むか: explain/client.ts と同じ（import 時固定を避け vitest stubEnv 可能に）。
  * 真の信頼境界はサーバ。ここは送信前の補助検証 + UX。
  */
+import { formatExplainNetworkError } from '../explain/errors';
 import { getTurnstileToken } from '../explain/turnstile';
 import {
   type FeedbackKind,
@@ -71,7 +72,23 @@ export async function submitFeedback(
     'Content-Type': 'application/json',
     Authorization: `Bearer ${supabaseAnon()}`,
   };
-  const turnstileToken = await getTurnstileToken();
+  /*
+   * 人間確認は失敗しうる（未完了のまま時間切れ・挑戦の失敗）。
+   * WHY try で包むか（GPT 監査 2026-08-13 P2）: turnstile.ts に時間切れを入れたことで
+   *   getTurnstileToken() が reject するようになった。ここは fetch の try の外なので、
+   *   握らないと FeedbackDialog（try/finally のみ）を素通りして未処理の rejection になり、
+   *   ユーザーにはエラーもフォールバック URL も出ないまま送信が消える。
+   */
+  let turnstileToken: string | null = null;
+  try {
+    turnstileToken = await getTurnstileToken();
+  } catch (err) {
+    return {
+      ok: false,
+      error: formatExplainNetworkError(err),
+      fallbackUrl: getFeedbackFormUrl(),
+    };
+  }
   if (turnstileToken) headers['x-turnstile-token'] = turnstileToken;
 
   let res: Response;

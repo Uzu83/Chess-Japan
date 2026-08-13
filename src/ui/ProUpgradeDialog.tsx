@@ -15,6 +15,8 @@ export function ProUpgradeDialog({
   onConfirm,
   busy = false,
   error = null,
+  confirmLabel = 'とりあえず始めてみる',
+  busyLabel = '決済ページへ…',
 }: {
   open: boolean;
   onClose: () => void;
@@ -22,6 +24,12 @@ export function ProUpgradeDialog({
   busy?: boolean;
   /** Checkout / Portal 失敗時のユーザー向けメッセージ（BillingButtons と同じ経路）。 */
   error?: string | null;
+  /**
+   * 確定ボタンの文言。未ログインの訪問者には決済ではなくログインへ進むため、
+   * 「何が起きるか」を正直に出せるよう差し替え可能にしている。
+   */
+  confirmLabel?: string;
+  busyLabel?: string;
 }) {
   if (!open) return null;
 
@@ -118,7 +126,7 @@ export function ProUpgradeDialog({
             onClick={onConfirm}
             className="focus-ai mt-5 min-h-11 w-full rounded-xl bg-ai px-3 text-sm font-medium text-white shadow-btn transition hover:bg-ai-hover disabled:opacity-50"
           >
-            {busy ? '決済ページへ…' : 'とりあえず始めてみる'}
+            {busy ? busyLabel : confirmLabel}
           </button>
           <button
             type="button"

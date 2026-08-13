@@ -425,20 +425,57 @@ Deno.serve(async (req: Request) => {
   if (ENFORCE_STORE && !STORE_READY)
     return new Response(JSON.stringify({ error: 'service unavailable' }), { status: 503, headers });
 
-  // 本番ハードガード（#2・bot 防壁の必須化）:
-  //   課金キーがあるのに Turnstile 未設定だと、コスト防衛が spoofable/不安定な IP だけに依存してしまう。
-  //   公開コスト防衛として不十分なので、TURNSTILE_SECRET 未設定なら 503 で止める（＝公開には Turnstile キーが要る）。
-  //   real key の無い preview/dev では ENFORCE_TURNSTILE=false なので素通し（テストを止めない）。
-  if (ENFORCE_TURNSTILE && !TURNSTILE_SECRET)
-    return new Response(JSON.stringify({ error: 'bot protection required' }), {
+  /*
+   * Turnstile はここでは検証しない（2026-08-13 に順序変更）。
+   *
+   * WHY 後ろへ動かしたか（実害があった）:
+   *   本番 QA で「対局 → レビュー → この手を解説する」を未ログインで踏むと、解説本文が出ずに
+   *   右下の "Verify you are human" で止まった。名前が「1手解説AI」なのに、中核機能の手前に
+   *   人間確認が挟まる＝初訪問者に価値が一度も届かない状態だった。
+   *
+   *   一方 explain_cache のヒットは LLM を呼ばない＝**原価ゼロ**。原価ゼロの応答を bot 防壁の
+   *   後ろに置く理由は無い。そこで判定順を
+   *     CORS → store guard → **レート制限(IP)** → auth → body 上限 → 入力検証 → キャッシュ照会
+   *       →（ヒットなら即返す）→ **Turnstile** → クォータ → LLM
+   *   に変更した。サンプル棋譜の定番局面はキャッシュに乗るため、多くの初訪問者は人間確認を
+   *   一度も見ずに解説へ到達できる。
+   *
+   *   不変条件は維持している: **LLM を呼ぶ経路には必ず Turnstile が残る**（下の「課金経路の門」）。
+   *   ENFORCE_TURNSTILE / TURNSTILE_SECRET の意味も変えていない。
+   *   キャッシュ照会まで到達できる匿名リクエストが増えるが、そこまでの防壁（CORS・IP レート
+   *   制限・16KB 上限・厳格検証）は素通しにしていない。キャッシュ照会は DB 読み取り 1 回で、
+   *   LLM 課金とは桁が違う。
+   */
+
+  /*
+   * 分次レート制限は auth より前（GPT 監査 2026-08-13 P1）。
+   *
+   * WHY: getAuthUser / fetchProfileBilling は Supabase Auth + profiles へのネットワーク往復。
+   *   CORS をすり抜けた直叩きに JWT 形の Bearer を付けると、Turnstile も rateCheck も通る前に
+   *   `/auth/v1/user` を打ててしまう。probe 枠で先に IP を絞れば、認証ルックアップの増幅を止められる。
+   *   判定に必要なのは x-turnstile-token の有無だけで、uid / plan は後段の日次枠まで要らない。
+   *
+   * トークン未提示の1回目を本枠で数えない:
+   *   キャッシュに無いと「トークン無し → 403 turnstile required → トークン付きで再試行」の
+   *   2 リクエストになる。両方を min:ip で数えると 15/分の枠が実質 7 操作に半減し、
+   *   さらに 15 回目が握手だと**必要な再試行が 429 で弾かれる**（正当な利用が壊れる）。
+   *   握手は LLM を呼ばないので、別枠（緩め）に付けて本枠は「実際に仕事をする側」だけに課す。
+   *   これで濫用の上限は残しつつ、1操作 = 本枠1回になる。
+   */
+  const hasTurnstileToken = Boolean(req.headers.get('x-turnstile-token'));
+  const chargesMainQuota = hasTurnstileToken || !TURNSTILE_SECRET;
+  const minRate = await rateCheck(
+    chargesMainQuota ? `min:ip:${ip}` : `min:probe:ip:${ip}`,
+    chargesMainQuota ? RATE_PER_MIN : RATE_PER_MIN * 2,
+    60,
+  );
+  if (minRate === 'limited')
+    return new Response(JSON.stringify({ error: 'rate limited' }), { status: 429, headers });
+  if (minRate === 'error' && ENFORCE_STORE)
+    return new Response(JSON.stringify({ error: 'rate limiter unavailable' }), {
       status: 503,
       headers,
     });
-
-  // Turnstile 検証。bot による自動濫用を入口で弾く（IP に依存しない人間性証明＝#2 の硬い防壁）。
-  //   TURNSTILE_SECRET 設定時のみ実検証（未設定かつ非課金環境では verifyTurnstile が素通し）。
-  if (!(await verifyTurnstile(req.headers.get('x-turnstile-token'), ip)))
-    return new Response(JSON.stringify({ error: 'turnstile failed' }), { status: 403, headers });
 
   // 任意 JWT → profiles.plan。anon のままなら free（IP 枠）。
   // WHY checkout 前でも explain は動かす: 無料体験が転換の入口。
@@ -458,16 +495,6 @@ Deno.serve(async (req: Request) => {
       uid = authUser.id;
     }
   }
-
-  // 共有ストアのレート制限（分）＋日次／月次クォータ。コスト防衛の主防壁。
-  const minRate = await rateCheck(`min:ip:${ip}`, RATE_PER_MIN, 60);
-  if (minRate === 'limited')
-    return new Response(JSON.stringify({ error: 'rate limited' }), { status: 429, headers });
-  if (minRate === 'error' && ENFORCE_STORE)
-    return new Response(JSON.stringify({ error: 'rate limiter unavailable' }), {
-      status: 503,
-      headers,
-    });
 
   // Content-Length 先行チェック → ストリーム読みで実バイト上限。
   const declaredLen = Number(req.headers.get('content-length') ?? '0');
@@ -503,6 +530,7 @@ Deno.serve(async (req: Request) => {
   const model = useDeep ? resolveDeepModel(provider) : resolveModel(provider);
 
   // explain はキャッシュ対象。hit 時はクォータを消費しない（原価ゼロの再利用）。
+  // ここが Turnstile より前にあるのは意図的（上の「順序変更」コメント参照）。
   let cacheKey: string | null = null;
   if (body.mode === 'explain') {
     cacheKey = await hashCacheKey(body, provider, model);
@@ -513,6 +541,39 @@ Deno.serve(async (req: Request) => {
         { headers },
       );
   }
+
+  /*
+   * ── ここから先は LLM を呼びうる＝お金が出る経路。bot 防壁はこの門に置く ──
+   *
+   * 本番ハードガード（#2・bot 防壁の必須化）:
+   *   課金キーがあるのに Turnstile 未設定だと、コスト防衛が spoofable/不安定な IP だけに依存してしまう。
+   *   公開コスト防衛として不十分なので、TURNSTILE_SECRET 未設定なら 503 で止める。
+   *   real key の無い preview/dev では ENFORCE_TURNSTILE=false なので素通し（テストを止めない）。
+   *   注: キャッシュヒットはこの門の手前で返るため、設定事故時も「既にある解説」は読める（劣化運転）。
+   */
+  if (ENFORCE_TURNSTILE && !TURNSTILE_SECRET)
+    return new Response(JSON.stringify({ error: 'bot protection required' }), {
+      status: 503,
+      headers,
+    });
+
+  /*
+   * Turnstile 検証。bot による自動濫用を弾く（IP に依存しない人間性証明＝#2 の硬い防壁）。
+   *   TURNSTILE_SECRET 設定時のみ実検証（未設定かつ非課金環境では verifyTurnstile が素通し）。
+   *   followup は常にここへ来る（キャッシュ対象外＝必ず LLM を呼ぶため）。
+   *
+   * トークン**未提示**と**検証失敗**を区別する（GPT 監査 2026-08-13 P2 の修正）:
+   *   クライアントは1回目をトークン無しで投げる（キャッシュヒットなら人間確認を出さずに済む）。
+   *   ここまで来た＝キャッシュに無い＝LLM を呼ぶので、初めて人間確認を要求する。
+   *   `turnstile required` は「トークンを取って出し直せ」という**再試行の合図**で、
+   *   `turnstile failed` は「出されたトークンが無効」という拒否。混ぜると
+   *   クライアントが再試行すべきかどうか判断できない。
+   */
+  const turnstileToken = req.headers.get('x-turnstile-token');
+  if (TURNSTILE_SECRET && !turnstileToken)
+    return new Response(JSON.stringify({ error: 'turnstile required' }), { status: 403, headers });
+  if (!(await verifyTurnstile(turnstileToken, ip)))
+    return new Response(JSON.stringify({ error: 'turnstile failed' }), { status: 403, headers });
 
   // 日次/月次枠は LLM 課金前のみ消費。
   if (useDeep && uid) {
