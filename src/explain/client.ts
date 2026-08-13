@@ -140,13 +140,16 @@ export async function requestExplanation(req: ExplainRequest): Promise<string> {
     return /failed to fetch/i.test(msg);
   };
 
-  /** 初回 POST のみ: 冷起動等の一時失敗を 1 回だけ自動再試行（Turnstile 403 経路とは独立）。 */
+  /*
+   * トークン無しの初回 POST のみ、冷起動等の一時失敗を 1 回だけ自動再試行する。
+   * トークン付きは LLM 課金経路なので、応答喪失時の二重消費を避ける（GPT 監査）。
+   */
   const NETWORK_RETRY_MS = 400;
   const postFirstWithNetworkRetry = async (token: string | null): Promise<Response> => {
     try {
       return await post(token);
     } catch (err) {
-      if (!isNetworkFetchError(err)) {
+      if (!isNetworkFetchError(err) || token) {
         throw new Error(formatExplainNetworkError(err));
       }
       await new Promise((r) => setTimeout(r, NETWORK_RETRY_MS));

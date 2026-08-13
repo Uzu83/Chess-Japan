@@ -1,15 +1,16 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { isBackendConfigured, localExplanation, requestExplanation } from './client';
 import type { ExplainRequest } from './client';
+import { takeReadyTurnstileToken } from './turnstile';
 
 /*
  * Turnstile はモジュール定数で SITE_KEY を捕獲するため、.env.local にキーがあると
  * getTurnstileToken が script 待ちでハングする。API エラー試験では必ず no-op にする。
  */
 vi.mock('./turnstile', () => ({
-  getTurnstileToken: async () => 'fresh-token',
-  takeReadyTurnstileToken: () => null,
-  isTurnstileEnabled: () => false,
+  getTurnstileToken: vi.fn(async () => 'fresh-token'),
+  takeReadyTurnstileToken: vi.fn(() => null),
+  isTurnstileEnabled: vi.fn(() => false),
 }));
 
 /*
@@ -108,6 +109,20 @@ describe('explain client (API エラー)', () => {
     await assertion;
     expect(fetchMock).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+
+  /*
+   * 用意済みトークン付き POST は LLM 課金経路。ネットワーク失敗で自動再試行すると
+   * 二重消費になりうる（GPT 監査 F001）。token があるときは 1 回で止める。
+   */
+  it('用意済みトークンがある Failed to fetch は再試行しない', async () => {
+    vi.mocked(takeReadyTurnstileToken).mockReturnValueOnce('ready-token');
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(requestExplanation(baseReq)).rejects.toThrow(/棋譜は失われていません/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('1回目 TypeError のとき同じ POST を再試行し、2回目成功なら本文を返す', async () => {
