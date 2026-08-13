@@ -127,15 +127,36 @@ export async function requestExplanation(req: ExplainRequest): Promise<string> {
   const url = `${supabaseUrl()}/functions/v1/explain`;
   const post = async (token: string | null): Promise<Response> => {
     const h = token ? { ...headers, 'x-turnstile-token': token } : headers;
-    try {
-      return await fetch(url, { method: 'POST', headers: h, body: JSON.stringify(req) });
-    } catch (err) {
-      // WHY: CORS 無し応答 / ネットワーク切断だと TypeError: Failed to fetch
-      throw new Error(formatExplainNetworkError(err));
-    }
+    // WHY: 呼び出し側でネットワーク再試行を制御するため、ここでは生の fetch 例外をそのまま投げる
+    return await fetch(url, { method: 'POST', headers: h, body: JSON.stringify(req) });
   };
   const read = async (res: Response) =>
     (await res.json().catch(() => ({}))) as { text?: string; error?: string };
+
+  /** CORS 失敗・ネットワーク切断はブラウザが TypeError: Failed to fetch に畳む。 */
+  const isNetworkFetchError = (err: unknown): boolean => {
+    if (err instanceof TypeError) return true;
+    const msg = err instanceof Error ? err.message : String(err);
+    return /failed to fetch/i.test(msg);
+  };
+
+  /** 初回 POST のみ: 冷起動等の一時失敗を 1 回だけ自動再試行（Turnstile 403 経路とは独立）。 */
+  const NETWORK_RETRY_MS = 400;
+  const postFirstWithNetworkRetry = async (token: string | null): Promise<Response> => {
+    try {
+      return await post(token);
+    } catch (err) {
+      if (!isNetworkFetchError(err)) {
+        throw new Error(formatExplainNetworkError(err));
+      }
+      await new Promise((r) => setTimeout(r, NETWORK_RETRY_MS));
+      try {
+        return await post(token);
+      } catch (retryErr) {
+        throw new Error(formatExplainNetworkError(retryErr));
+      }
+    }
+  };
 
   /*
    * 1回目は **人間確認を待たずに**投げる（GPT 監査 2026-08-13 P2 の修正）。
@@ -145,7 +166,7 @@ export async function requestExplanation(req: ExplainRequest): Promise<string> {
    *   キャッシュ経路に永久に到達しない（並べ替えが無意味になる）。
    *   手元に用意済みのトークンがあれば付けるが、無いからといって**取りに行かない**。
    */
-  let res = await post(takeReadyTurnstileToken());
+  let res = await postFirstWithNetworkRetry(takeReadyTurnstileToken());
   let data = await read(res);
 
   /*
@@ -160,7 +181,11 @@ export async function requestExplanation(req: ExplainRequest): Promise<string> {
     } catch (err) {
       throw new Error(formatExplainNetworkError(err));
     }
-    res = await post(token);
+    try {
+      res = await post(token);
+    } catch (err) {
+      throw new Error(formatExplainNetworkError(err));
+    }
     data = await read(res);
   }
 

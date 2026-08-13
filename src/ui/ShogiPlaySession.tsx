@@ -169,7 +169,7 @@ export default function ShogiPlaySession({ onReview, playFrom }: ShogiPlaySessio
 
   // 設定
   const [colorChoice, setColorChoice] = useState<ColorChoice>('sente');
-  const [difficulty, setDifficulty] = useState<Difficulty>(DIFFICULTIES[1]); // 既定 ふつう
+  const [difficulty, setDifficulty] = useState<Difficulty>(DIFFICULTIES[0]); // 既定 やさしい
   const [ratedChoice, setRatedChoice] = useState(true);
 
   // 進行中の対局で確定した値（ref で非同期処理から最新を読む）
@@ -479,7 +479,7 @@ export default function ShogiPlaySession({ onReview, playFrom }: ShogiPlaySessio
   const engineReady = engineKind === 'yaneuraou';
   const engineLabel =
     engineKind === 'loading'
-      ? '読み込み中…'
+      ? '読み込み中…（初回は数秒かかることがあります）'
       : engineKind === 'yaneuraou'
         ? 'やねうら王 WASM'
         : engineKind === 'unsupported'
@@ -822,7 +822,7 @@ function ShogiSetupScreen({
           className="focus-ai min-h-12 rounded-xl bg-ai px-6 text-base font-semibold text-white shadow-btn hover:bg-ai-hover motion-safe:transition-all motion-safe:hover:-translate-y-0.5 motion-safe:hover:shadow-card-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none dark:bg-ai-dim dark:hover:bg-ai"
         >
           {engineKind === 'loading'
-            ? 'エンジン読み込み中…'
+            ? 'エンジン読み込み中…（初回は数秒かかることがあります）'
             : engineKind === 'unsupported'
               ? 'この端末では対局できません'
               : engineKind === 'mock'

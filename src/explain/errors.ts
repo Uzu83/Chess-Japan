@@ -54,6 +54,14 @@ export function formatExplainApiError(status: number, bodyError?: string | null)
  * WHY billing と同型か: ブラウザは CORS 失敗を TypeError: Failed to fetch に畳むため、
  *   生メッセージを出すと「試合してないから？」と誤解される。接続の問題だと明示する。
  */
+/** fetch 失敗時の汎用日本語。棋譜はクライアント側に残っていることを明示する。 */
+const NETWORK_ERROR_JA = '通信が不安定です。棋譜は失われていません。再試行してください';
+
+/** ブラウザ/ライブラリ由来の英語メッセージを UI に漏らさないための簡易判定。 */
+function looksLikeEnglishMessage(msg: string): boolean {
+  return /[a-zA-Z]/.test(msg) && !/[\u3040-\u30ff\u4e00-\u9faf]/.test(msg);
+}
+
 export function formatExplainNetworkError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   /*
@@ -65,8 +73,9 @@ export function formatExplainNetworkError(err: unknown): string {
     return '画面右下の「あなたは人間ですか」の確認を完了してください。完了してから再試行すると解説が表示されます';
   if (/turnstile/i.test(msg)) return BODY_JA['turnstile failed']!;
   if (/failed to fetch/i.test(msg) || err instanceof TypeError) {
-    return '解説サーバーに接続できませんでした。再読み込みしてから再試行してください';
+    return NETWORK_ERROR_JA;
   }
+  if (looksLikeEnglishMessage(msg)) return NETWORK_ERROR_JA;
   return msg;
 }
 

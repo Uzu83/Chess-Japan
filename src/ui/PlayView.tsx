@@ -185,7 +185,7 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
 
   // 設定(設定画面での選択)
   const [colorChoice, setColorChoice] = useState<ColorChoice>('white');
-  const [difficulty, setDifficulty] = useState<Difficulty>(DIFFICULTIES[1]); // 既定 ふつう
+  const [difficulty, setDifficulty] = useState<Difficulty>(DIFFICULTIES[0]); // 既定 やさしい
 
   // 進行中の対局で確定した自分の色/難度(ref で最新値を非同期処理から参照)
   const [youColor, setYouColor] = useState<PieceColor>('white');
@@ -552,7 +552,7 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
 
   const engineLabel =
     engineKind === 'loading'
-      ? '読み込み中…'
+      ? '読み込み中…（初回は数秒かかることがあります）'
       : engineKind === 'stockfish'
         ? 'Stockfish WASM'
         : 'モック評価';
@@ -972,7 +972,7 @@ function SetupScreen({
           disabled={engineLoading}
           className="focus-ai min-h-12 rounded-xl bg-ai px-6 text-base font-semibold text-white shadow-btn hover:bg-ai-hover motion-safe:transition-all motion-safe:hover:-translate-y-0.5 motion-safe:hover:shadow-card-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none dark:bg-ai-dim dark:hover:bg-ai"
         >
-          {engineLoading ? 'エンジン読み込み中…' : '対局開始'}
+          {engineLoading ? 'エンジン読み込み中…（初回は数秒かかることがあります）' : '対局開始'}
         </button>
 
         {/* ── FEN から対局(Phase 2B: 詰将棋・練習問題・途中局面) ──

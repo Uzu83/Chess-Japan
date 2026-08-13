@@ -97,13 +97,32 @@ describe('explain client (API エラー)', () => {
   });
 
   it('Failed to fetch は日本語の接続エラーに畳む', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => {
-        throw new TypeError('Failed to fetch');
-      }),
-    );
-    await expect(requestExplanation(baseReq)).rejects.toThrow(/接続できません/);
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.useFakeTimers();
+    const p = requestExplanation(baseReq);
+    const assertion = expect(p).rejects.toThrow(/棋譜は失われていません/);
+    await vi.advanceTimersByTimeAsync(400);
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it('1回目 TypeError のとき同じ POST を再試行し、2回目成功なら本文を返す', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(Response.json({ text: '再試行後の解説' }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.useFakeTimers();
+    const p = requestExplanation(baseReq);
+    await vi.advanceTimersByTimeAsync(400);
+    const text = await p;
+    expect(text).toBe('再試行後の解説');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 
   /*

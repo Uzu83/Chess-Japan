@@ -38,10 +38,18 @@ describe('isProRequiredExplainMessage', () => {
 
 describe('formatExplainNetworkError', () => {
   it('maps Failed to fetch to a Japanese retry hint', () => {
-    expect(formatExplainNetworkError(new TypeError('Failed to fetch'))).toContain('接続できません');
+    expect(formatExplainNetworkError(new TypeError('Failed to fetch'))).toContain(
+      '棋譜は失われていません',
+    );
     expect(formatExplainNetworkError(new TypeError('Failed to fetch'))).not.toMatch(
       /Failed to fetch/i,
     );
+  });
+
+  it('maps unknown English errors to generic Japanese', () => {
+    const msg = formatExplainNetworkError(new Error('Network connection lost'));
+    expect(msg).toContain('棋譜は失われていません');
+    expect(msg).not.toMatch(/Network connection lost/);
   });
 
   it('maps Turnstile client failures to the same copy as API 403', () => {
