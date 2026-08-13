@@ -72,5 +72,6 @@ describe('BillingButtons 未ログインからの Pro', () => {
       </AuthContext.Provider>,
     );
     await waitFor(() => expect(startCheckout).toHaveBeenCalledTimes(1));
+    expect(sessionStorage.getItem('cj:resume-checkout')).toBeNull();
   });
 });

@@ -72,9 +72,10 @@ export function BillingButtons() {
    */
   useEffect(() => {
     if (!isBillingConfigured() || status === 'disabled' || !signedIn) return;
-    const resume = resumeAfterAuth.current || consumeResumeCheckout();
-    if (!resume) return;
+    const fromRef = resumeAfterAuth.current;
     resumeAfterAuth.current = false;
+    const fromStore = consumeResumeCheckout();
+    if (!fromRef && !fromStore) return;
     setAuthOpen(false);
     setUpgradeOpen(false);
     void run(startCheckout);

@@ -33,7 +33,10 @@ let scriptPromise: Promise<void> | null = null;
 let widgetId: string | null = null;
 let container: HTMLElement | null = null;
 // 実行中の execute の解決先。Turnstile の callback がここへ token を届ける。
-let pending: { resolve: (t: string) => void; reject: (e: Error) => void } | null = null;
+let pending: { resolve: (t: string) => void; reject: (e: Error) => void; gen: number } | null =
+  null;
+/** いま有効な挑戦の世代。時間切れ後の古い callback が次の pending を満たさないようにする。 */
+let challengeGen = 0;
 // トークン取得を直列化する鎖。同時に複数 execute を走らせない（pending スロットは1つしか持てない）。
 let chain: Promise<unknown> = Promise.resolve();
 
@@ -123,15 +126,18 @@ function ensureWidget(): void {
     execution: 'execute',
     appearance: 'interaction-only',
     callback: (token: string) => {
-      pending?.resolve(token);
+      if (!pending || pending.gen !== challengeGen) return;
+      pending.resolve(token);
       pending = null;
     },
     'error-callback': () => {
-      pending?.reject(new Error('Turnstile challenge failed'));
+      if (!pending || pending.gen !== challengeGen) return;
+      pending.reject(new Error('Turnstile challenge failed'));
       pending = null;
     },
     'timeout-callback': () => {
-      pending?.reject(new Error('Turnstile timed out'));
+      if (!pending || pending.gen !== challengeGen) return;
+      pending.reject(new Error('Turnstile timed out'));
       pending = null;
     },
   });
@@ -142,8 +148,9 @@ async function execute(): Promise<string | null> {
   await loadScript();
   ensureWidget();
   if (!window.turnstile || !widgetId) return null;
+  const gen = ++challengeGen;
   return await new Promise<string>((resolve, reject) => {
-    pending = { resolve, reject };
+    pending = { resolve, reject, gen };
     try {
       window.turnstile!.reset(widgetId!); // 前回トークンを破棄して新しい挑戦へ
       window.turnstile!.execute(container!);
@@ -160,41 +167,34 @@ async function execute(): Promise<string | null> {
  * タイムアウトは **この呼び出しの execute が始まってから** 数える（GPT 監査 2026-08-13 P2）。
  *   待ち行列の時間まで 12 秒に含めると、先客の挑戦が長いとき後続が実行前に時間切れし、
  *   鎖に残った execute が後から挑戦を追加で出してしまう。
- *   鎖そのものは「実際の execute 完了」まで閉じたままにし、時間切れした呼び出しが
- *   動いている挑戦を reset で潰さないようにする。
+ *   時間切れしたら鎖は解放する（GPT 監査 2026-08-13 P2）。挑戦が永久に終わらないとき
+ *   running を待ち続けると、再試行もフィードバックもハングして時間切れの意味が消える。
  */
 function executeOwn(): Promise<string | null> {
   const prev = chain;
-  let running: Promise<string | null> = Promise.resolve(null);
 
   const startSlot = (): Promise<string | null> => {
     const ready = takePrefetched();
     if (ready) return Promise.resolve(ready);
-    running = execute();
-    return withTimeout(running, TOKEN_TIMEOUT_MS);
+    const running = execute();
+    return withTimeout(running, TOKEN_TIMEOUT_MS).catch((e: unknown) => {
+      challengeGen += 1;
+      pending = null;
+      try {
+        if (widgetId && window.turnstile) window.turnstile.reset(widgetId);
+      } catch {
+        /* reset 失敗でも鎖は解放する */
+      }
+      throw e instanceof Error ? e : new Error(String(e));
+    });
   };
 
   const timed = prev.then(startSlot, startSlot);
-
-  chain = timed
-    .then(
-      () => running,
-      () => running,
-    )
-    .then(
-      () => {},
-      () => {},
-    );
-
-  return timed.catch((e: unknown) => {
-    running.then(
-      (t) => {
-        if (t && !prefetched) prefetched = { token: t, at: Date.now() };
-      },
-      () => {},
-    );
-    throw e instanceof Error ? e : new Error(String(e));
-  });
+  chain = timed.then(
+    () => {},
+    () => {},
+  );
+  return timed;
 }
 
 /**
@@ -202,7 +202,6 @@ function executeOwn(): Promise<string | null> {
  *   - site key 未設定なら null（＝ヘッダを付けない。バックエンドも非課金環境では検証 skip）。
  *   - トークンは単発使用なので毎回 reset→execute で新規発行し、callback 経由で受け取る。
  *   - 直列化（chain）で同時実行を防ぐ（pending スロットは1つ）。
- *   - 時間切れ後に遅れて届いたトークンが残っていればそれを消費して即返す。
  *   - TOKEN_TIMEOUT_MS を超えたら `turnstile timeout` で reject し、呼び出し側が案内を出せるようにする。
  */
 export function getTurnstileToken(): Promise<string | null> {

@@ -92,6 +92,37 @@ describe('prefetchTurnstileScript', () => {
     await expect(second).resolves.toBe('token-2');
     vi.useRealTimers();
   });
+
+  it('時間切れ後も次のトークン取得が鎖で詰まらない', async () => {
+    vi.useFakeTimers();
+    let callback: ((token: string) => void) | undefined;
+    window.turnstile = {
+      render: (_el, opts: Record<string, unknown>) => {
+        callback = opts.callback as (token: string) => void;
+        return 'wid';
+      },
+      execute: vi.fn(),
+      reset: vi.fn(),
+    };
+
+    const { getTurnstileToken, prefetchTurnstileScript } = await loadTurnstile('test-site-key');
+    prefetchTurnstileScript();
+    document.querySelector(`script[src*="${SCRIPT_HINT}"]`)!.dispatchEvent(new Event('load'));
+    await Promise.resolve();
+
+    const first = getTurnstileToken();
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(12_000);
+    await expect(first).rejects.toThrow(/turnstile timeout/);
+
+    const second = getTurnstileToken();
+    await Promise.resolve();
+    await Promise.resolve();
+    callback?.('token-retry');
+    await expect(second).resolves.toBe('token-retry');
+    vi.useRealTimers();
+  });
 });
 
 describe('レビュー入場は挑戦を先回りしない（GPT 監査 P2）', () => {
