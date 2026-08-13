@@ -1,7 +1,7 @@
 import type { ExplanationContext, KnowledgeProfile, MoveQuality } from '../core/types';
 import { qualityLabelJa } from '../core/classify';
 import { uciToSan, uciLineToSan } from '../core/notation';
-import { formatExplainApiError } from './errors';
+import { formatExplainApiError, formatExplainNetworkError } from './errors';
 import { getTurnstileToken } from './turnstile';
 
 export type ExplainMode = 'explain' | 'followup';
@@ -126,13 +126,24 @@ export async function requestExplanation(req: ExplainRequest): Promise<string> {
   }
   // Turnstile 有効時のみ、リクエスト毎の新鮮なトークンを x-turnstile-token に付与（#2）。
   // 未設定なら null で無付与（バックエンドも非課金環境では検証 skip）。単発トークンなので都度取得。
-  const turnstileToken = await getTurnstileToken();
+  let turnstileToken: string | null = null;
+  try {
+    turnstileToken = await getTurnstileToken();
+  } catch (err) {
+    throw new Error(formatExplainNetworkError(err));
+  }
   if (turnstileToken) headers['x-turnstile-token'] = turnstileToken;
-  const res = await fetch(`${supabaseUrl()}/functions/v1/explain`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(req),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${supabaseUrl()}/functions/v1/explain`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(req),
+    });
+  } catch (err) {
+    // WHY: CORS 無し応答 / ネットワーク切断だと TypeError: Failed to fetch
+    throw new Error(formatExplainNetworkError(err));
+  }
   const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
   if (!res.ok) {
     throw new Error(formatExplainApiError(res.status, data.error));

@@ -159,7 +159,7 @@ Deno.serve(async (req) => {
     origin,
     allowedOrigins: ALLOWED_ORIGINS,
     isHosted: IS_HOSTED,
-    allowHeaders: 'authorization, content-type, x-turnstile-token',
+    allowHeaders: 'authorization, content-type, apikey, x-turnstile-token',
   });
   const headers = cors.headers;
 

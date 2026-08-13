@@ -8,6 +8,8 @@
  * 選択肢の構成(Codex ゲート①合意の決定3・4):
  *   - ローカルレートがあれば「引き継ぐ」を第一選択肢に(決定4)
  *   - 自己申告プリセット 初心者1200/中級1500/上級1800(決定3)
+ *     プリセットは選択→「決定」で確定する（クリック即送信だと誤タップで
+ *     rating_initialized=true になり二度と出ない）。
  *   - 数値直接入力(chess.com / lichess のレートを想定)
  *   - スキップ = default 1200
  * プリセット値は自己申告のアンカーであり、AI 難度の目安 Elo(800-2800)とは独立。
@@ -38,6 +40,9 @@ export function OnboardingRatingDialog({ onSubmit }: Props) {
   const [custom, setCustom] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // プリセットは「選ぶ」と「確定する」を分ける。クリック即 submit だと誤タップで
+  // 二度と出ない初期化が走ってしまう（初回ログインで実害）。
+  const [selectedPreset, setSelectedPreset] = useState<(typeof PRESETS)[number] | null>(null);
   // 二重送信の同期ガード(監査ワークフロー指摘)。busy(state)は再レンダーまで
   // 反映されないため、素早い連打では disabled が間に合わない窓がある。
   // ref は同期更新なので2発目を確実に弾ける(サーバー側も冪等だが多層で)。
@@ -104,24 +109,50 @@ export function OnboardingRatingDialog({ onSubmit }: Props) {
           </button>
         )}
 
-        {/* 自己申告プリセット */}
+        {/* 自己申告プリセット: 選択 → 決定。クリック即送信しない。 */}
         <div className="flex flex-col gap-2">
-          {PRESETS.map((p) => (
-            <button
-              key={p.source}
-              type="button"
-              autoFocus={offer.kind !== 'migrate' && p.source === 'self_beginner'}
-              disabled={busy}
-              onClick={() => submit(p.value, p.source)}
-              className="focus-ai flex items-baseline justify-between rounded-xl border border-border bg-surface-2 px-4 py-3 text-left transition-colors hover:border-ai hover:bg-ai-bg disabled:opacity-50"
-            >
-              <span className="text-sm font-medium text-on-surface">
-                {p.label}
-                <span className="ml-2 text-xs text-muted">{p.note}</span>
-              </span>
-              <span className="text-xs text-muted">~{p.value}</span>
-            </button>
-          ))}
+          <div role="radiogroup" aria-label="実力の目安" className="flex flex-col gap-2">
+            {PRESETS.map((p) => {
+              const selected = selectedPreset?.source === p.source;
+              return (
+                <button
+                  key={p.source}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  autoFocus={offer.kind !== 'migrate' && p.source === 'self_beginner'}
+                  disabled={busy}
+                  onClick={() => {
+                    setSelectedPreset(p);
+                    setCustom('');
+                  }}
+                  className={
+                    selected
+                      ? 'focus-ai flex items-baseline justify-between rounded-xl border border-ai bg-ai-bg px-4 py-3 text-left transition-colors disabled:opacity-50'
+                      : 'focus-ai flex items-baseline justify-between rounded-xl border border-border bg-surface-2 px-4 py-3 text-left transition-colors hover:border-ai hover:bg-ai-bg disabled:opacity-50'
+                  }
+                >
+                  <span className="text-sm font-medium text-on-surface">
+                    {p.label}
+                    <span className="ml-2 text-xs text-muted">{p.note}</span>
+                  </span>
+                  <span className="text-xs text-muted">~{p.value}</span>
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            disabled={busy || !selectedPreset}
+            onClick={() => {
+              if (!selectedPreset) return;
+              void submit(selectedPreset.value, selectedPreset.source);
+            }}
+            aria-label="選択した実力で始める"
+            className="focus-ai min-h-11 rounded-xl bg-ai px-4 text-sm font-semibold text-white shadow-btn hover:bg-ai-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-ai-dim dark:hover:bg-ai"
+          >
+            決定
+          </button>
         </div>
 
         {/* 数値直接入力 */}
@@ -138,7 +169,10 @@ export function OnboardingRatingDialog({ onSubmit }: Props) {
               max={RATING_CEILING}
               value={custom}
               disabled={busy}
-              onChange={(e) => setCustom(e.target.value)}
+              onChange={(e) => {
+                setCustom(e.target.value);
+                setSelectedPreset(null);
+              }}
               placeholder="例: 1350"
               className="focus-ai min-h-11 w-full rounded-xl border border-border bg-surface-2 px-3 text-sm text-on-surface"
             />
@@ -146,6 +180,7 @@ export function OnboardingRatingDialog({ onSubmit }: Props) {
               type="button"
               disabled={busy || !customValid}
               onClick={() => submit(Math.round(customValue), 'self_custom')}
+              aria-label="入力したレートで始める"
               className="focus-ai min-h-11 shrink-0 rounded-xl bg-ai px-4 text-sm font-semibold text-white shadow-btn hover:bg-ai-hover disabled:cursor-not-allowed disabled:opacity-50 dark:bg-ai-dim dark:hover:bg-ai"
             >
               決定
