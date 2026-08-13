@@ -144,39 +144,6 @@ async function execute(): Promise<string | null> {
   });
 }
 
-/*
- * 進行中の取得。**同時に2本走らせない**のが最重要（GPT 監査 2026-08-13 P1）。
- *
- * WHY: execute() は毎回 reset() で前のトークンを破棄する。先回り取得が人間確認を待っている
- *   最中に getTurnstileToken() が別の execute を積むと、完了したばかりの先回りトークンを
- *   その reset が無効化し、挑戦をもう一度やり直させてしまう。
- *   進行中の Promise を共有し、**結果の書き込み先も prefetched ひとつに集約**して、
- *   「発行するのは runOnce だけ・消費するのは takePrefetched だけ」にする（二重消費の排除）。
- */
-let prefetchInflight: Promise<void> | null = null;
-/** 進行中の先回り取得を、既にどこかの呼び出しが引き取ったか（引き取れるのは1人だけ）。 */
-let prefetchClaimed = false;
-
-/** 先回り取得を1本だけ走らせる。結果は prefetched に入れる。 */
-function startPrefetch(): Promise<void> {
-  if (prefetchInflight) return prefetchInflight;
-  // 直前の取得が終わってから実行（成否問わず次へ）。鎖自体の失敗は握りつぶして詰まらせない。
-  const raw = chain.then(execute, execute);
-  chain = raw.catch(() => {});
-  const tracked = raw.then(
-    (t) => {
-      prefetchInflight = null;
-      if (t) prefetched = { token: t, at: Date.now() };
-    },
-    (e: unknown) => {
-      prefetchInflight = null;
-      throw e instanceof Error ? e : new Error(String(e));
-    },
-  );
-  prefetchInflight = tracked;
-  return tracked;
-}
-
 /** 自分専用にトークンを1つ発行する（鎖で直列化。他の呼び出しと取り合いにならない）。 */
 function executeOwn(): Promise<string | null> {
   const own = chain.then(execute, execute);
@@ -189,7 +156,7 @@ function executeOwn(): Promise<string | null> {
  *   - site key 未設定なら null（＝ヘッダを付けない。バックエンドも非課金環境では検証 skip）。
  *   - トークンは単発使用なので毎回 reset→execute で新規発行し、callback 経由で受け取る。
  *   - 直列化（chain）で同時実行を防ぐ（pending スロットは1つ）。
- *   - 先回り取得済み（prefetchTurnstileToken）があればそれを消費して即返す。
+ *   - 時間切れ後に遅れて届いたトークンが残っていればそれを消費して即返す。
  *   - TOKEN_TIMEOUT_MS を超えたら `turnstile timeout` で reject し、呼び出し側が案内を出せるようにする。
  */
 export function getTurnstileToken(): Promise<string | null> {
@@ -197,19 +164,6 @@ export function getTurnstileToken(): Promise<string | null> {
 
   const ready = takePrefetched();
   if (ready) return Promise.resolve(ready);
-
-  /*
-   * 進行中の先回り取得があれば、それを **1人だけ** が引き取る。
-   * WHY: ここで別の execute を積むと reset() が先回りトークンを潰し、挑戦をやり直させる。
-   *   ただし引き取れるのは1人。2人目が同じ Promise を待つと、片方が takePrefetched() で
-   *   トークンを取り、もう片方は null になる（解説とフィードバックの同時送信で実際に起きる）。
-   *   2人目以降は下の「自分専用」経路へ回す（GPT 監査 2026-08-13 P2）。
-   * 時間切れになっても結果は prefetched に残るので、遅れて確認を完了した後の再試行は即通る。
-   */
-  if (prefetchInflight && !prefetchClaimed) {
-    prefetchClaimed = true;
-    return withTimeout(prefetchInflight, TOKEN_TIMEOUT_MS).then(() => takePrefetched());
-  }
 
   // 呼び出しごとに自分のトークンを発行する（同時呼び出しでも取り合いにならない）。
   const own = executeOwn();
@@ -240,16 +194,15 @@ export function takeReadyTurnstileToken(): string | null {
 }
 
 /**
- * トークンを先回りで用意しておく（2026-08-13 追加）。
+ * Turnstile の **script だけ**先に読む（GPT 監査 2026-08-13 P2）。
  *
- * WHY: 解説ボタンを押してから script ロード → widget 生成 → execute を始めると、その待ち時間が
- *   まるごと「解説が出ない時間」になる。レビュー画面に入った時点で裏で取っておけば、
- *   押した瞬間に手元のトークンを使えて体感の摩擦が消える。
+ * WHY execute しないか: レビュー入場時点では解説するかわからないし、キャッシュヒットなら
+ *   人間確認は不要。挑戦を先に走らせると「この手を解説する」を押していない人にも
+ *   右下ウィジェットが出うる。script だけ温めておけば、`turnstile required` のあとの
+ *   getTurnstileToken() が script 待ちせずに execute できる。
  *   失敗しても黙って諦める（本来の取得は getTurnstileToken 側でやり直せるため）。
  */
-export function prefetchTurnstileToken(): void {
+export function prefetchTurnstileScript(): void {
   if (!SITE_KEY) return;
-  if (prefetched && Date.now() - prefetched.at < PREFETCH_TTL_MS) return;
-  prefetchClaimed = false;
-  void startPrefetch().catch(() => {});
+  void loadScript().catch(() => {});
 }

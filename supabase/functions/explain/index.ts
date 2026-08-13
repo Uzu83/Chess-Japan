@@ -435,7 +435,7 @@ Deno.serve(async (req: Request) => {
    *
    *   一方 explain_cache のヒットは LLM を呼ばない＝**原価ゼロ**。原価ゼロの応答を bot 防壁の
    *   後ろに置く理由は無い。そこで判定順を
-   *     CORS → store guard → auth → レート制限(IP) → body 上限 → 入力検証 → キャッシュ照会
+   *     CORS → store guard → **レート制限(IP)** → auth → body 上限 → 入力検証 → キャッシュ照会
    *       →（ヒットなら即返す）→ **Turnstile** → クォータ → LLM
    *   に変更した。サンプル棋譜の定番局面はキャッシュに乗るため、多くの初訪問者は人間確認を
    *   一度も見ずに解説へ到達できる。
@@ -447,29 +447,15 @@ Deno.serve(async (req: Request) => {
    *   LLM 課金とは桁が違う。
    */
 
-  // 任意 JWT → profiles.plan。anon のままなら free（IP 枠）。
-  // WHY checkout 前でも explain は動かす: 無料体験が転換の入口。
-  const authUser = await getAuthUser(req, {
-    supabaseUrl: SUPABASE_URL,
-    anonKey: Deno.env.get('SUPABASE_ANON_KEY') ?? undefined,
-    serviceRoleKey: SERVICE_ROLE_KEY,
-  });
-  let effectivePlan: Plan = 'free';
-  let uid: string | null = null;
-  if (authUser && STORE_READY && SUPABASE_URL && SERVICE_ROLE_KEY) {
-    const billing = await fetchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, authUser.id);
-    if (billing && isProEntitled(billing)) {
-      effectivePlan = 'pro';
-      uid = authUser.id;
-    } else if (billing) {
-      uid = authUser.id;
-    }
-  }
-
   /*
-   * 共有ストアのレート制限（分）＋日次／月次クォータ。コスト防衛の主防壁。
+   * 分次レート制限は auth より前（GPT 監査 2026-08-13 P1）。
    *
-   * トークン未提示の1回目を本枠で数えない（GPT 監査 2026-08-13 P1）:
+   * WHY: getAuthUser / fetchProfileBilling は Supabase Auth + profiles へのネットワーク往復。
+   *   CORS をすり抜けた直叩きに JWT 形の Bearer を付けると、Turnstile も rateCheck も通る前に
+   *   `/auth/v1/user` を打ててしまう。probe 枠で先に IP を絞れば、認証ルックアップの増幅を止められる。
+   *   判定に必要なのは x-turnstile-token の有無だけで、uid / plan は後段の日次枠まで要らない。
+   *
+   * トークン未提示の1回目を本枠で数えない:
    *   キャッシュに無いと「トークン無し → 403 turnstile required → トークン付きで再試行」の
    *   2 リクエストになる。両方を min:ip で数えると 15/分の枠が実質 7 操作に半減し、
    *   さらに 15 回目が握手だと**必要な再試行が 429 で弾かれる**（正当な利用が壊れる）。
@@ -490,6 +476,25 @@ Deno.serve(async (req: Request) => {
       status: 503,
       headers,
     });
+
+  // 任意 JWT → profiles.plan。anon のままなら free（IP 枠）。
+  // WHY checkout 前でも explain は動かす: 無料体験が転換の入口。
+  const authUser = await getAuthUser(req, {
+    supabaseUrl: SUPABASE_URL,
+    anonKey: Deno.env.get('SUPABASE_ANON_KEY') ?? undefined,
+    serviceRoleKey: SERVICE_ROLE_KEY,
+  });
+  let effectivePlan: Plan = 'free';
+  let uid: string | null = null;
+  if (authUser && STORE_READY && SUPABASE_URL && SERVICE_ROLE_KEY) {
+    const billing = await fetchProfileBilling(SUPABASE_URL, SERVICE_ROLE_KEY, authUser.id);
+    if (billing && isProEntitled(billing)) {
+      effectivePlan = 'pro';
+      uid = authUser.id;
+    } else if (billing) {
+      uid = authUser.id;
+    }
+  }
 
   // Content-Length 先行チェック → ストリーム読みで実バイト上限。
   const declaredLen = Number(req.headers.get('content-length') ?? '0');

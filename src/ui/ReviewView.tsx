@@ -15,7 +15,7 @@ import { useAuth } from '../auth/authState';
 import { setFeedbackBoardContext } from '../feedback/boardContext';
 import { requestExplanation } from '../explain/client';
 import { isProRequiredExplainMessage } from '../explain/errors';
-import { prefetchTurnstileToken } from '../explain/turnstile';
+import { prefetchTurnstileScript } from '../explain/turnstile';
 import {
   hashPgn,
   loadContextsFromStorage,
@@ -769,14 +769,16 @@ export function ReviewView({
   }, [active, kind, fen]);
 
   /*
-   * 人間確認トークンの先回り取得（2026-08-13）。
-   * レビューに入った時点で裏で取っておくと、「この手を解説する」を押した瞬間に手元にある。
-   * WHY ここか: 解説を押しうるのはレビュー画面だけで、押す前に数秒の猶予がある唯一の場所。
-   * Turnstile 未設定環境では no-op。失敗しても本来の取得が getTurnstileToken でやり直される。
+   * Turnstile スクリプトだけ先に読む（GPT 監査 2026-08-13 P2）。
+   * WHY execute しないか: レビュー入場時点では解説するかわからないし、キャッシュヒットなら
+   *   人間確認は不要。挑戦を先に走らせると押していない人にも右下ウィジェットが出うる。
+   *   script だけ温めておけば、サーバーが turnstile required を返したあとの
+   *   getTurnstileToken() が script 待ちせずに execute できる。
+   * Turnstile 未設定環境では no-op。
    */
   useEffect(() => {
     if (!active) return;
-    prefetchTurnstileToken();
+    prefetchTurnstileScript();
   }, [active]);
 
   // ── 解説コールバック ─────────────────────────────────────────
