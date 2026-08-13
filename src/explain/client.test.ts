@@ -88,4 +88,14 @@ describe('explain client (API エラー)', () => {
     );
     await expect(requestExplanation(baseReq)).rejects.toThrow(/本日/);
   });
+
+  it('Failed to fetch は日本語の接続エラーに畳む', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+    await expect(requestExplanation(baseReq)).rejects.toThrow(/接続できません/);
+  });
 });

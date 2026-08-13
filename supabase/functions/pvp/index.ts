@@ -99,7 +99,7 @@ Deno.serve(async (req) => {
     origin,
     allowedOrigins: ALLOWED_ORIGINS,
     isHosted: IS_HOSTED,
-    allowHeaders: 'authorization, content-type',
+    allowHeaders: 'authorization, content-type, apikey',
   });
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: cors.allowed ? 204 : 403, headers: cors.headers });

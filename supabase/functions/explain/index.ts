@@ -103,11 +103,12 @@ const ENFORCE_TURNSTILE = HAS_PROVIDER_KEY;
  * 注意(合意点): CORS は curl 等の直叩きを防げない＝“補助策”。主防壁はレート制限/クォータ/Turnstile/入力検証。
  */
 function resolveCors(origin: string | null): { allowed: boolean; headers: Record<string, string> } {
+  // allowHeaders は cors.ts の DEFAULT（apikey を含む）を使う。
+  // 上書きで apikey を落とすと、ログイン中の解説が preflight 失敗→ Failed to fetch になる。
   return resolveCorsShared({
     origin,
     allowedOrigins: ALLOWED_ORIGINS,
     isHosted: IS_HOSTED,
-    allowHeaders: 'authorization, content-type, x-turnstile-token',
   });
 }
 

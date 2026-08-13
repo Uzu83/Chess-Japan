@@ -49,6 +49,20 @@ export function formatExplainApiError(status: number, bodyError?: string | null)
   return `解説の取得に失敗しました（${status}）`;
 }
 
+/**
+ * fetch 自体が落ちたとき（CORS preflight 失敗 / ネットワーク / Edge 未捕捉 500）。
+ * WHY billing と同型か: ブラウザは CORS 失敗を TypeError: Failed to fetch に畳むため、
+ *   生メッセージを出すと「試合してないから？」と誤解される。接続の問題だと明示する。
+ */
+export function formatExplainNetworkError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/turnstile/i.test(msg)) return BODY_JA['turnstile failed']!;
+  if (/failed to fetch/i.test(msg) || err instanceof TypeError) {
+    return '解説サーバーに接続できませんでした。再読み込みしてから再試行してください';
+  }
+  return msg;
+}
+
 /** 表示メッセージが深掘り Pro 必須（402）系かどうか。CTA 出し分け用。 */
 export function isProRequiredExplainMessage(message: string): boolean {
   return (

@@ -1,4 +1,8 @@
-import { formatExplainApiError, isProRequiredExplainMessage } from './errors';
+import {
+  formatExplainApiError,
+  formatExplainNetworkError,
+  isProRequiredExplainMessage,
+} from './errors';
 
 describe('formatExplainApiError', () => {
   it('maps known body errors', () => {
@@ -29,5 +33,18 @@ describe('isProRequiredExplainMessage', () => {
 
   it('rejects unrelated errors', () => {
     expect(isProRequiredExplainMessage('アクセスが集中しています')).toBe(false);
+  });
+});
+
+describe('formatExplainNetworkError', () => {
+  it('maps Failed to fetch to a Japanese retry hint', () => {
+    expect(formatExplainNetworkError(new TypeError('Failed to fetch'))).toContain('接続できません');
+    expect(formatExplainNetworkError(new TypeError('Failed to fetch'))).not.toMatch(
+      /Failed to fetch/i,
+    );
+  });
+
+  it('maps Turnstile client failures to the same copy as API 403', () => {
+    expect(formatExplainNetworkError(new Error('Turnstile challenge failed'))).toContain('ボット');
   });
 });
