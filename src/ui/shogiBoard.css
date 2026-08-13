@@ -61,6 +61,61 @@
   background: rgba(155, 199, 0, 0.4);
 }
 
+/* ── 選択と移動可能マス（2026-08-13 追加） ──────────────────────
+   WHY 必要だったか（実害）:
+     shogiground は selectable/showDests が有効なら sq へ selected / dest / dest.oc /
+     hover のクラスを**すでに付けている**。しかし shogiground は CSS を同梱しないため
+     （このファイル冒頭の設計判断のとおり）、last-dest 以外は無スタイル＝画面に何も出ていなかった。
+     チェス側は chessground の CSS があるので出る、という非対称になっていた。
+     結果、駒を選んでも手応えが無く「タップが空振りした」ように見える（本番 QA 2026-08-13 の
+     『駒の中心だと空振りしやすい』報告は、当たり判定ではなく**選択フィードバックの欠落**が主因の疑い）。
+
+   配色: 盤の地色 #f2d9a4 と last-dest の黄緑に埋もれない藍系を選ぶ。
+     取れるマス（.oc = occupied）は「進める」ではなく「取れる」なので朱系のリングで区別する
+     （棋譜パネルの成駒表示 #b3452b と同系統にして、朱＝相手に触る色、で意味を揃える）。 */
+
+/* 選択中のマス。駒はこの上に描かれるので、背景で囲う形にする。 */
+.sg-wrap sg-squares sq.selected {
+  background: rgba(38, 84, 168, 0.38);
+}
+
+/* 移動できる空きマス: 中央のドット。駒の下に来るが空きマスなので見える。 */
+.sg-wrap sg-squares sq.dest {
+  background-image: radial-gradient(rgba(38, 84, 168, 0.55) 0 19%, rgba(38, 84, 168, 0) 20%);
+}
+
+/* 取れるマス: ドットだと駒に隠れるのでリングにする。 */
+.sg-wrap sg-squares sq.dest.oc {
+  background-image: radial-gradient(
+    rgba(179, 69, 43, 0) 0 62%,
+    rgba(179, 69, 43, 0.75) 63% 78%,
+    rgba(179, 69, 43, 0) 79%
+  );
+}
+
+/* ポインタが乗っているマス（選択中のみ shogiground が付ける）。控えめに。 */
+.sg-wrap sg-squares sq.hover {
+  background-color: rgba(38, 84, 168, 0.16);
+}
+
+/* 王手されている玉のマス。config の highlight.check: true と対。
+   これも今までクラスだけ付いて CSS が無く、王手が盤上で分からなかった。 */
+.sg-wrap sg-squares sq.check {
+  background-image: radial-gradient(
+    rgba(200, 40, 40, 0.75) 0 28%,
+    rgba(200, 40, 40, 0.35) 45%,
+    rgba(200, 40, 40, 0) 70%
+  );
+}
+
+/* 選択中の持ち駒（打つ駒を選んだ状態）。盤上の selected と同じ意味なので同系色。 */
+.sg-wrap sg-hp-wrap.selected {
+  background: rgba(38, 84, 168, 0.18);
+  border-radius: 5px;
+  outline: 2px solid rgba(38, 84, 168, 0.6);
+  outline-offset: -1px;
+}
+
 /* 盤上の駒レイヤ。piece は shogiground が inline transform: translate(x%,y%) で配置する。
    1駒 = 盤の 1/9（11.111%）に固定することで、translate の 100% 単位＝1マス移動になる。 */
 .sg-wrap sg-pieces {
