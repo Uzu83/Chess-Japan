@@ -537,10 +537,22 @@ Deno.serve(async (req: Request) => {
       headers,
     });
 
-  // Turnstile 検証。bot による自動濫用を弾く（IP に依存しない人間性証明＝#2 の硬い防壁）。
-  //   TURNSTILE_SECRET 設定時のみ実検証（未設定かつ非課金環境では verifyTurnstile が素通し）。
-  //   followup は常にここへ来る（キャッシュ対象外＝必ず LLM を呼ぶため）。
-  if (!(await verifyTurnstile(req.headers.get('x-turnstile-token'), ip)))
+  /*
+   * Turnstile 検証。bot による自動濫用を弾く（IP に依存しない人間性証明＝#2 の硬い防壁）。
+   *   TURNSTILE_SECRET 設定時のみ実検証（未設定かつ非課金環境では verifyTurnstile が素通し）。
+   *   followup は常にここへ来る（キャッシュ対象外＝必ず LLM を呼ぶため）。
+   *
+   * トークン**未提示**と**検証失敗**を区別する（GPT 監査 2026-08-13 P2 の修正）:
+   *   クライアントは1回目をトークン無しで投げる（キャッシュヒットなら人間確認を出さずに済む）。
+   *   ここまで来た＝キャッシュに無い＝LLM を呼ぶので、初めて人間確認を要求する。
+   *   `turnstile required` は「トークンを取って出し直せ」という**再試行の合図**で、
+   *   `turnstile failed` は「出されたトークンが無効」という拒否。混ぜると
+   *   クライアントが再試行すべきかどうか判断できない。
+   */
+  const turnstileToken = req.headers.get('x-turnstile-token');
+  if (TURNSTILE_SECRET && !turnstileToken)
+    return new Response(JSON.stringify({ error: 'turnstile required' }), { status: 403, headers });
+  if (!(await verifyTurnstile(turnstileToken, ip)))
     return new Response(JSON.stringify({ error: 'turnstile failed' }), { status: 403, headers });
 
   // 日次/月次枠は LLM 課金前のみ消費。

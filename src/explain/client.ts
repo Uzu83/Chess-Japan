@@ -2,7 +2,7 @@ import type { ExplanationContext, KnowledgeProfile, MoveQuality } from '../core/
 import { qualityLabelJa } from '../core/classify';
 import { uciToSan, uciLineToSan } from '../core/notation';
 import { formatExplainApiError, formatExplainNetworkError } from './errors';
-import { getTurnstileToken } from './turnstile';
+import { getTurnstileToken, takeReadyTurnstileToken } from './turnstile';
 
 export type ExplainMode = 'explain' | 'followup';
 
@@ -124,27 +124,46 @@ export async function requestExplanation(req: ExplainRequest): Promise<string> {
   } catch {
     // Auth 未設定時は anon のまま
   }
-  // Turnstile 有効時のみ、リクエスト毎の新鮮なトークンを x-turnstile-token に付与（#2）。
-  // 未設定なら null で無付与（バックエンドも非課金環境では検証 skip）。単発トークンなので都度取得。
-  let turnstileToken: string | null = null;
-  try {
-    turnstileToken = await getTurnstileToken();
-  } catch (err) {
-    throw new Error(formatExplainNetworkError(err));
+  const url = `${supabaseUrl()}/functions/v1/explain`;
+  const post = async (token: string | null): Promise<Response> => {
+    const h = token ? { ...headers, 'x-turnstile-token': token } : headers;
+    try {
+      return await fetch(url, { method: 'POST', headers: h, body: JSON.stringify(req) });
+    } catch (err) {
+      // WHY: CORS 無し応答 / ネットワーク切断だと TypeError: Failed to fetch
+      throw new Error(formatExplainNetworkError(err));
+    }
+  };
+  const read = async (res: Response) =>
+    (await res.json().catch(() => ({}))) as { text?: string; error?: string };
+
+  /*
+   * 1回目は **人間確認を待たずに**投げる（GPT 監査 2026-08-13 P2 の修正）。
+   *
+   * WHY: サーバーはキャッシュヒットを Turnstile より前に返すようにした。しかしクライアントが
+   *   毎回 getTurnstileToken() を await してから fetch していたら、その手前で挑戦が出てしまい、
+   *   キャッシュ経路に永久に到達しない（並べ替えが無意味になる）。
+   *   手元に用意済みのトークンがあれば付けるが、無いからといって**取りに行かない**。
+   */
+  let res = await post(takeReadyTurnstileToken());
+  let data = await read(res);
+
+  /*
+   * サーバーが「トークンを取って出し直せ」と言ったときだけ人間確認へ進む。
+   * ここまで来た＝キャッシュに無い＝LLM を呼ぶので、確認を求めるのは正当。
+   * 再試行は1回だけ（無限ループにしない）。
+   */
+  if (res.status === 403 && data.error === 'turnstile required') {
+    let token: string | null = null;
+    try {
+      token = await getTurnstileToken();
+    } catch (err) {
+      throw new Error(formatExplainNetworkError(err));
+    }
+    res = await post(token);
+    data = await read(res);
   }
-  if (turnstileToken) headers['x-turnstile-token'] = turnstileToken;
-  let res: Response;
-  try {
-    res = await fetch(`${supabaseUrl()}/functions/v1/explain`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(req),
-    });
-  } catch (err) {
-    // WHY: CORS 無し応答 / ネットワーク切断だと TypeError: Failed to fetch
-    throw new Error(formatExplainNetworkError(err));
-  }
-  const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
+
   if (!res.ok) {
     throw new Error(formatExplainApiError(res.status, data.error));
   }

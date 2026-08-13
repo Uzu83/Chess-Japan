@@ -67,8 +67,8 @@ function takePrefetched(): string | null {
   return token;
 }
 
-function withTimeout(p: Promise<string | null>, ms: number): Promise<string | null> {
-  return new Promise<string | null>((resolve, reject) => {
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
     const id = setTimeout(() => reject(new Error('turnstile timeout')), ms);
     p.then(
       (v) => {
@@ -144,11 +144,34 @@ async function execute(): Promise<string | null> {
   });
 }
 
-/** 直前の取得が終わってから実行（成否問わず次へ）。鎖自体の失敗は握りつぶして詰まらせない。 */
-function enqueue(): Promise<string | null> {
-  const p = chain.then(execute, execute);
-  chain = p.catch(() => {});
-  return p;
+/*
+ * 進行中の取得。**同時に2本走らせない**のが最重要（GPT 監査 2026-08-13 P1）。
+ *
+ * WHY: execute() は毎回 reset() で前のトークンを破棄する。先回り取得が人間確認を待っている
+ *   最中に getTurnstileToken() が別の execute を積むと、完了したばかりの先回りトークンを
+ *   その reset が無効化し、挑戦をもう一度やり直させてしまう。
+ *   進行中の Promise を共有し、**結果の書き込み先も prefetched ひとつに集約**して、
+ *   「発行するのは runOnce だけ・消費するのは takePrefetched だけ」にする（二重消費の排除）。
+ */
+let inflight: Promise<void> | null = null;
+
+function runOnce(): Promise<void> {
+  if (inflight) return inflight;
+  // 直前の取得が終わってから実行（成否問わず次へ）。鎖自体の失敗は握りつぶして詰まらせない。
+  const raw = chain.then(execute, execute);
+  chain = raw.catch(() => {});
+  const tracked = raw.then(
+    (t) => {
+      inflight = null;
+      if (t) prefetched = { token: t, at: Date.now() };
+    },
+    (e: unknown) => {
+      inflight = null;
+      throw e instanceof Error ? e : new Error(String(e));
+    },
+  );
+  inflight = tracked;
+  return tracked;
 }
 
 /**
@@ -165,21 +188,25 @@ export function getTurnstileToken(): Promise<string | null> {
   const ready = takePrefetched();
   if (ready) return Promise.resolve(ready);
 
-  const inflight = enqueue();
-  return withTimeout(inflight, TOKEN_TIMEOUT_MS).catch((e: unknown) => {
-    /*
-     * 時間切れで諦めたあとにユーザーが人間確認を完了することがある。その遅れて届いた
-     * トークンを捨てると「再試行」でまた挑戦からやり直しになるので、次回用に温存する。
-     * （単発使用なので、ここで温存したものは次の getTurnstileToken が消費して終わり）
-     */
-    inflight.then(
-      (t) => {
-        if (t) prefetched = { token: t, at: Date.now() };
-      },
-      () => {},
-    );
-    throw e instanceof Error ? e : new Error(String(e));
-  });
+  /*
+   * 時間切れになっても runOnce の結果は prefetched に残る。捨てないので、
+   * ユーザーが遅れて人間確認を完了したあとの「再試行」は即座に通る。
+   */
+  return withTimeout(runOnce(), TOKEN_TIMEOUT_MS).then(() => takePrefetched());
+}
+
+/**
+ * **待たずに**使えるトークンを取り出す。無ければ null（挑戦を出さない）。
+ *
+ * WHY このAPIが要るか（GPT 監査 2026-08-13 P2 の修正）:
+ *   解説リクエストは「まずトークン無しで投げる → サーバーがキャッシュヒットなら即返す →
+ *   キャッシュに無いときだけ人間確認を求める」という順序にした。その1回目で
+ *   `getTurnstileToken()` を await すると、結局そこで挑戦が出てキャッシュ経路が塞がる。
+ *   手元にある分だけ付けて、無ければ付けずに投げるための同期版。
+ */
+export function takeReadyTurnstileToken(): string | null {
+  if (!SITE_KEY) return null;
+  return takePrefetched();
 }
 
 /**
@@ -193,10 +220,5 @@ export function getTurnstileToken(): Promise<string | null> {
 export function prefetchTurnstileToken(): void {
   if (!SITE_KEY) return;
   if (prefetched && Date.now() - prefetched.at < PREFETCH_TTL_MS) return;
-  void enqueue().then(
-    (t) => {
-      if (t) prefetched = { token: t, at: Date.now() };
-    },
-    () => {},
-  );
+  void runOnce().catch(() => {});
 }
