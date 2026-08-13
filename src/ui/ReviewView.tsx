@@ -15,6 +15,7 @@ import { useAuth } from '../auth/authState';
 import { setFeedbackBoardContext } from '../feedback/boardContext';
 import { requestExplanation } from '../explain/client';
 import { isProRequiredExplainMessage } from '../explain/errors';
+import { prefetchTurnstileToken } from '../explain/turnstile';
 import {
   hashPgn,
   loadContextsFromStorage,
@@ -766,6 +767,17 @@ export function ReviewView({
       position: fen,
     });
   }, [active, kind, fen]);
+
+  /*
+   * 人間確認トークンの先回り取得（2026-08-13）。
+   * レビューに入った時点で裏で取っておくと、「この手を解説する」を押した瞬間に手元にある。
+   * WHY ここか: 解説を押しうるのはレビュー画面だけで、押す前に数秒の猶予がある唯一の場所。
+   * Turnstile 未設定環境では no-op。失敗しても本来の取得が getTurnstileToken でやり直される。
+   */
+  useEffect(() => {
+    if (!active) return;
+    prefetchTurnstileToken();
+  }, [active]);
 
   // ── 解説コールバック ─────────────────────────────────────────
 

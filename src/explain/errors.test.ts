@@ -47,4 +47,15 @@ describe('formatExplainNetworkError', () => {
   it('maps Turnstile client failures to the same copy as API 403', () => {
     expect(formatExplainNetworkError(new Error('Turnstile challenge failed'))).toContain('ボット');
   });
+
+  /*
+   * 人間確認の未完了は「失敗」ではなく「ユーザーの操作待ち」。
+   * 汎用のボット対策文言に吸収されると、右下のウィジェットを完了すればよいことが伝わらない。
+   */
+  it('turnstile timeout は操作を促す文言にする（汎用の失敗文言に吸収しない）', () => {
+    const msg = formatExplainNetworkError(new Error('turnstile timeout'));
+    expect(msg).toContain('右下');
+    expect(msg).toContain('確認を完了');
+    expect(msg).not.toContain('再読み込み');
+  });
 });

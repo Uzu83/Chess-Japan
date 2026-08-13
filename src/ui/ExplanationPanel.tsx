@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ExplanationContext, GameKind } from '../core/types';
 import { qualityLabelJa } from '../core/classify';
 import { uciToSan, uciLineToSan } from '../core/notation';
@@ -110,8 +110,22 @@ function EmptyState() {
   );
 }
 
+/*
+ * 「時間がかかっている」と案内を出すまでの秒数。
+ * 通常の解説取得は数秒で返る。それを超えるのは (a) LLM が混んでいる (b) 右下の人間確認が
+ * 未完了、のどちらか。(b) はユーザーがウィジェットに気づかないと永久に進まないため、
+ * 黙って回し続けずに何をすればいいかを出す（本番 QA 2026-08-13 の無限スピナー対策）。
+ */
+const SLOW_HINT_MS = 6_000;
+
 /** 解説取得中のスケルトン。prefers-reduced-motion に配慮した animate-pulse 使用。 */
 function SkeletonLoader() {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const id = setTimeout(() => setSlow(true), SLOW_HINT_MS);
+    return () => clearTimeout(id);
+  }, []);
+
   return (
     <div role="status" aria-label="解説を取得中" aria-busy="true" className="flex flex-col gap-2">
       {[80, 100, 60, 90].map((w, i) => (
@@ -124,6 +138,11 @@ function SkeletonLoader() {
         />
       ))}
       <span className="sr-only">AI が解説を生成中です…</span>
+      {slow && (
+        <p className="text-xs text-muted">
+          時間がかかっています。画面の右下に「あなたは人間ですか」の確認が出ていたら、それを完了すると解説が続きます。
+        </p>
+      )}
     </div>
   );
 }
