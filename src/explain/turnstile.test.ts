@@ -4,6 +4,7 @@ import reviewSrc from '../ui/ReviewView.tsx?raw';
 const SCRIPT_HINT = 'challenges.cloudflare.com/turnstile';
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.resetModules();
   vi.unstubAllEnvs();
   document.querySelectorAll(`script[src*="${SCRIPT_HINT}"]`).forEach((el) => el.remove());
@@ -58,6 +59,38 @@ describe('prefetchTurnstileScript', () => {
     ]);
     expect(raced).toBe('pending');
     pending.catch(() => {});
+  });
+
+  it('待ち行列の待機時間はトークン取得のタイムアウトに含めない', async () => {
+    vi.useFakeTimers();
+    let callback: ((token: string) => void) | undefined;
+    window.turnstile = {
+      render: (_el, opts: Record<string, unknown>) => {
+        callback = opts.callback as (token: string) => void;
+        return 'wid';
+      },
+      execute: vi.fn(),
+      reset: vi.fn(),
+    };
+
+    const { getTurnstileToken, prefetchTurnstileScript } = await loadTurnstile('test-site-key');
+    prefetchTurnstileScript();
+    document.querySelector(`script[src*="${SCRIPT_HINT}"]`)!.dispatchEvent(new Event('load'));
+    await Promise.resolve();
+
+    const first = getTurnstileToken();
+    const second = getTurnstileToken();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(11_000);
+    callback?.('token-1');
+    await expect(first).resolves.toBe('token-1');
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    callback?.('token-2');
+    await expect(second).resolves.toBe('token-2');
+    vi.useRealTimers();
   });
 });
 

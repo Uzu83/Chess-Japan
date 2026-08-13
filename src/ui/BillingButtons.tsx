@@ -3,11 +3,44 @@
  *
  * Pro はいきなり Checkout せず、相場比較つきダイアログを挟む（納得→開始）。
  */
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/authState';
 import { isBillingConfigured, openCustomerPortal, startCheckout } from '../billing/client';
 import { AuthDialog } from './AuthDialog';
 import { ProUpgradeDialog } from './ProUpgradeDialog';
+
+/*
+ * 未ログインから Pro を押したあとの「ログインしたら決済へ戻る」印。
+ * OAuth はページを離れるので sessionStorage。メールログインは同一ページなので ref でも持つ。
+ * ダイアログを閉じたら捨てる（普通のログイン導線で突然 Checkout が始まらないように）。
+ */
+const RESUME_CHECKOUT_KEY = 'cj:resume-checkout';
+
+function markResumeCheckout(): void {
+  try {
+    sessionStorage.setItem(RESUME_CHECKOUT_KEY, '1');
+  } catch {
+    /* プライベートモード等。ref 側で同一ページの再開は残る */
+  }
+}
+
+function consumeResumeCheckout(): boolean {
+  try {
+    const on = sessionStorage.getItem(RESUME_CHECKOUT_KEY) === '1';
+    if (on) sessionStorage.removeItem(RESUME_CHECKOUT_KEY);
+    return on;
+  } catch {
+    return false;
+  }
+}
+
+function clearResumeCheckout(): void {
+  try {
+    sessionStorage.removeItem(RESUME_CHECKOUT_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
 export function BillingButtons() {
   const { status, profile } = useAuth();
@@ -15,6 +48,37 @@ export function BillingButtons() {
   const [err, setErr] = useState<string | null>(null);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
+  const resumeAfterAuth = useRef(false);
+  const signedIn = status === 'signedIn';
+  const isPro = signedIn && profile?.plan === 'pro' && profile?.stripe_status === 'active';
+
+  const run = useCallback(async (fn: () => Promise<void>) => {
+    setErr(null);
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  /*
+   * ログイン完了後に Checkout へ戻る（GPT 監査 2026-08-13 P2）。
+   *   未ログインの確定は AuthDialog を開くだけだと、メールログイン後もダイアログが残り、
+   *   OAuth 戻りでは意図が消える。訪問者は料金ページまで来たのに、もう一度 Pro を探さないと
+   *   決済が始まらない。
+   */
+  useEffect(() => {
+    if (!isBillingConfigured() || status === 'disabled' || !signedIn) return;
+    const resume = resumeAfterAuth.current || consumeResumeCheckout();
+    if (!resume) return;
+    resumeAfterAuth.current = false;
+    setAuthOpen(false);
+    setUpgradeOpen(false);
+    void run(startCheckout);
+  }, [signedIn, status, run]);
 
   if (!isBillingConfigured()) return null;
   /*
@@ -28,21 +92,6 @@ export function BillingButtons() {
    * auth 自体が無効な環境（disabled）では出さない。ログインできないのに勧めても行き止まりになる。
    */
   if (status === 'disabled') return null;
-
-  const signedIn = status === 'signedIn';
-  const isPro = signedIn && profile?.plan === 'pro' && profile?.stripe_status === 'active';
-
-  const run = async (fn: () => Promise<void>) => {
-    setErr(null);
-    setBusy(true);
-    try {
-      await fn();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   return (
     <span className="inline-flex items-center gap-2">
@@ -87,6 +136,8 @@ export function BillingButtons() {
         busyLabel={signedIn ? '決済ページへ…' : '準備中…'}
         onConfirm={() => {
           if (!signedIn) {
+            resumeAfterAuth.current = true;
+            markResumeCheckout();
             setUpgradeOpen(false);
             setAuthOpen(true);
             return;
@@ -96,7 +147,16 @@ export function BillingButtons() {
           });
         }}
       />
-      <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} />
+      <AuthDialog
+        open={authOpen}
+        onClose={() => {
+          setAuthOpen(false);
+          if (!signedIn) {
+            resumeAfterAuth.current = false;
+            clearResumeCheckout();
+          }
+        }}
+      />
     </span>
   );
 }

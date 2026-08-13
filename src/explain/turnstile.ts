@@ -154,11 +154,47 @@ async function execute(): Promise<string | null> {
   });
 }
 
-/** 自分専用にトークンを1つ発行する（鎖で直列化。他の呼び出しと取り合いにならない）。 */
+/**
+ * 自分専用にトークンを1つ発行する（鎖で直列化）。
+ *
+ * タイムアウトは **この呼び出しの execute が始まってから** 数える（GPT 監査 2026-08-13 P2）。
+ *   待ち行列の時間まで 12 秒に含めると、先客の挑戦が長いとき後続が実行前に時間切れし、
+ *   鎖に残った execute が後から挑戦を追加で出してしまう。
+ *   鎖そのものは「実際の execute 完了」まで閉じたままにし、時間切れした呼び出しが
+ *   動いている挑戦を reset で潰さないようにする。
+ */
 function executeOwn(): Promise<string | null> {
-  const own = chain.then(execute, execute);
-  chain = own.catch(() => {});
-  return own;
+  const prev = chain;
+  let running: Promise<string | null> = Promise.resolve(null);
+
+  const startSlot = (): Promise<string | null> => {
+    const ready = takePrefetched();
+    if (ready) return Promise.resolve(ready);
+    running = execute();
+    return withTimeout(running, TOKEN_TIMEOUT_MS);
+  };
+
+  const timed = prev.then(startSlot, startSlot);
+
+  chain = timed
+    .then(
+      () => running,
+      () => running,
+    )
+    .then(
+      () => {},
+      () => {},
+    );
+
+  return timed.catch((e: unknown) => {
+    running.then(
+      (t) => {
+        if (t && !prefetched) prefetched = { token: t, at: Date.now() };
+      },
+      () => {},
+    );
+    throw e instanceof Error ? e : new Error(String(e));
+  });
 }
 
 /**
@@ -175,18 +211,7 @@ export function getTurnstileToken(): Promise<string | null> {
   const ready = takePrefetched();
   if (ready) return Promise.resolve(ready);
 
-  // 呼び出しごとに自分のトークンを発行する（同時呼び出しでも取り合いにならない）。
-  const own = executeOwn();
-  return withTimeout(own, TOKEN_TIMEOUT_MS).catch((e: unknown) => {
-    // 時間切れ後に遅れて届いたトークンは次回用に温存する（再試行を即通すため）。
-    own.then(
-      (t) => {
-        if (t && !prefetched) prefetched = { token: t, at: Date.now() };
-      },
-      () => {},
-    );
-    throw e instanceof Error ? e : new Error(String(e));
-  });
+  return executeOwn();
 }
 
 /**
