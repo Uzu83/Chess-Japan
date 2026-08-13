@@ -37,6 +37,28 @@ describe('prefetchTurnstileScript', () => {
     expect(render).not.toHaveBeenCalled();
     expect(takeReadyTurnstileToken()).toBeNull();
   });
+
+  it('script 読み込み失敗後も getTurnstileToken が同じ rejection を使い回さない', async () => {
+    const { prefetchTurnstileScript, getTurnstileToken } = await loadTurnstile('test-site-key');
+    prefetchTurnstileScript();
+    const first = document.querySelector(`script[src*="${SCRIPT_HINT}"]`);
+    expect(first).toBeTruthy();
+    first!.dispatchEvent(new Event('error'));
+    await Promise.resolve();
+
+    const pending = getTurnstileToken();
+    const raced = await Promise.race([
+      pending.then(
+        () => 'resolved',
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      ),
+      new Promise<string>((resolve) => {
+        setTimeout(() => resolve('pending'), 50);
+      }),
+    ]);
+    expect(raced).toBe('pending');
+    pending.catch(() => {});
+  });
 });
 
 describe('レビュー入場は挑戦を先回りしない（GPT 監査 P2）', () => {

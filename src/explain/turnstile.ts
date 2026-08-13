@@ -86,16 +86,26 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 /** Turnstile スクリプトを1度だけ動的ロード（site key があるときだけ呼ばれる）。 */
 function loadScript(): Promise<void> {
   if (scriptPromise) return scriptPromise;
-  scriptPromise = new Promise<void>((resolve, reject) => {
+  const attempt = new Promise<void>((resolve, reject) => {
     const s = document.createElement('script');
     s.src = SCRIPT_SRC;
     s.async = true;
     s.defer = true;
     s.onload = () => resolve();
-    s.onerror = () => reject(new Error('Turnstile script load failed'));
+    s.onerror = () => {
+      /*
+       * 失敗した Promise を残すと、レビュー入場の先読みが一度落ちたあと
+       * getTurnstileToken() が同じ rejection を使い回し、リロードまで解説も
+       * フィードバックも死ぬ（GPT 監査 2026-08-13 P2）。次の呼び出しでやり直す。
+       */
+      if (scriptPromise === attempt) scriptPromise = null;
+      s.remove();
+      reject(new Error('Turnstile script load failed'));
+    };
     document.head.appendChild(s);
   });
-  return scriptPromise;
+  scriptPromise = attempt;
+  return attempt;
 }
 
 /** ウィジェットを1度だけ生成（execute モード・interaction-only）。 */
