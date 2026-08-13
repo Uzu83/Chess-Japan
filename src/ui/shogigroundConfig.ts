@@ -154,7 +154,24 @@ export function buildShogiPlayConfig(p: ShogiPlayConfigParams): Config {
     highlight: { lastDests: true, check: true },
     hands: { inlined: true },
     animation: { enabled: true, duration: 200 },
-    draggable: { enabled: true, showGhost: true },
+    /*
+     * ドラッグは無効。タップ（クリック）で駒を選び、行き先をもう一度タップして着手する。
+     *
+     * WHY 無効にしたか（2026-08-13・本番 QA の「駒が空振りする」報告の根治）:
+     *   1. **shogiground 0.10.3 のドラッグ表示が壊れている**。`src/util.ts:69` の translateAbs が
+     *      `transform: translate(Xpx,Ypx) scale(1` と**括弧を閉じていない**。CSS として不正なので
+     *      ブラウザが宣言ごと破棄し、ドラッグ中の駒がカーソルに追従しない。QM 報告の
+     *      「選択後に dragging 状態が残る」はこれ（盤の左上に駒が出たまま固定される）。
+     *   2. **押した瞬間にドラッグ扱いになり、1マス跨いで戻すと選択が取り消される**
+     *      （`esm/drag.js:241-245`。マウスでは `started` が即 true）。数ピクセルのブレで
+     *      「押したのに何も起きない」＝空振りに見える。デスクトップで特に起きやすい。
+     *   ドラッグが壊れている以上、無効化して失うものは無い。タップ選択なら
+     *   `drag.end` が `!cur` で即 return するため、この取り消し経路自体を通らない。
+     *   選択・行き先表示は selectable / showDests + shogiBoard.css の .selected / .dest で出る。
+     *   上流が translateAbs を直したら、ここを true に戻して再評価してよい。
+     *   （チェス側は chessground なので無関係。ドラッグはそのまま動く）
+     */
+    draggable: { enabled: false },
     selectable: { enabled: true },
     movable: {
       free: false, // 合法手のみ
