@@ -1027,7 +1027,7 @@ export function ReviewView({
             />
           )}
           {engineKind === 'loading'
-            ? '読み込み中…'
+            ? '読み込み中…（初回は数秒かかることがあります）'
             : engineKind === 'stockfish'
               ? 'Stockfish WASM'
               : engineKind === 'yaneuraou'
