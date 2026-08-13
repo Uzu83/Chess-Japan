@@ -466,8 +466,23 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  // 共有ストアのレート制限（分）＋日次／月次クォータ。コスト防衛の主防壁。
-  const minRate = await rateCheck(`min:ip:${ip}`, RATE_PER_MIN, 60);
+  /*
+   * 共有ストアのレート制限（分）＋日次／月次クォータ。コスト防衛の主防壁。
+   *
+   * トークン未提示の1回目を本枠で数えない（GPT 監査 2026-08-13 P1）:
+   *   キャッシュに無いと「トークン無し → 403 turnstile required → トークン付きで再試行」の
+   *   2 リクエストになる。両方を min:ip で数えると 15/分の枠が実質 7 操作に半減し、
+   *   さらに 15 回目が握手だと**必要な再試行が 429 で弾かれる**（正当な利用が壊れる）。
+   *   握手は LLM を呼ばないので、別枠（緩め）に付けて本枠は「実際に仕事をする側」だけに課す。
+   *   これで濫用の上限は残しつつ、1操作 = 本枠1回になる。
+   */
+  const hasTurnstileToken = Boolean(req.headers.get('x-turnstile-token'));
+  const chargesMainQuota = hasTurnstileToken || !TURNSTILE_SECRET;
+  const minRate = await rateCheck(
+    chargesMainQuota ? `min:ip:${ip}` : `min:probe:ip:${ip}`,
+    chargesMainQuota ? RATE_PER_MIN : RATE_PER_MIN * 2,
+    60,
+  );
   if (minRate === 'limited')
     return new Response(JSON.stringify({ error: 'rate limited' }), { status: 429, headers });
   if (minRate === 'error' && ENFORCE_STORE)

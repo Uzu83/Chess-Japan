@@ -153,25 +153,35 @@ async function execute(): Promise<string | null> {
  *   進行中の Promise を共有し、**結果の書き込み先も prefetched ひとつに集約**して、
  *   「発行するのは runOnce だけ・消費するのは takePrefetched だけ」にする（二重消費の排除）。
  */
-let inflight: Promise<void> | null = null;
+let prefetchInflight: Promise<void> | null = null;
+/** 進行中の先回り取得を、既にどこかの呼び出しが引き取ったか（引き取れるのは1人だけ）。 */
+let prefetchClaimed = false;
 
-function runOnce(): Promise<void> {
-  if (inflight) return inflight;
+/** 先回り取得を1本だけ走らせる。結果は prefetched に入れる。 */
+function startPrefetch(): Promise<void> {
+  if (prefetchInflight) return prefetchInflight;
   // 直前の取得が終わってから実行（成否問わず次へ）。鎖自体の失敗は握りつぶして詰まらせない。
   const raw = chain.then(execute, execute);
   chain = raw.catch(() => {});
   const tracked = raw.then(
     (t) => {
-      inflight = null;
+      prefetchInflight = null;
       if (t) prefetched = { token: t, at: Date.now() };
     },
     (e: unknown) => {
-      inflight = null;
+      prefetchInflight = null;
       throw e instanceof Error ? e : new Error(String(e));
     },
   );
-  inflight = tracked;
+  prefetchInflight = tracked;
   return tracked;
+}
+
+/** 自分専用にトークンを1つ発行する（鎖で直列化。他の呼び出しと取り合いにならない）。 */
+function executeOwn(): Promise<string | null> {
+  const own = chain.then(execute, execute);
+  chain = own.catch(() => {});
+  return own;
 }
 
 /**
@@ -189,10 +199,30 @@ export function getTurnstileToken(): Promise<string | null> {
   if (ready) return Promise.resolve(ready);
 
   /*
-   * 時間切れになっても runOnce の結果は prefetched に残る。捨てないので、
-   * ユーザーが遅れて人間確認を完了したあとの「再試行」は即座に通る。
+   * 進行中の先回り取得があれば、それを **1人だけ** が引き取る。
+   * WHY: ここで別の execute を積むと reset() が先回りトークンを潰し、挑戦をやり直させる。
+   *   ただし引き取れるのは1人。2人目が同じ Promise を待つと、片方が takePrefetched() で
+   *   トークンを取り、もう片方は null になる（解説とフィードバックの同時送信で実際に起きる）。
+   *   2人目以降は下の「自分専用」経路へ回す（GPT 監査 2026-08-13 P2）。
+   * 時間切れになっても結果は prefetched に残るので、遅れて確認を完了した後の再試行は即通る。
    */
-  return withTimeout(runOnce(), TOKEN_TIMEOUT_MS).then(() => takePrefetched());
+  if (prefetchInflight && !prefetchClaimed) {
+    prefetchClaimed = true;
+    return withTimeout(prefetchInflight, TOKEN_TIMEOUT_MS).then(() => takePrefetched());
+  }
+
+  // 呼び出しごとに自分のトークンを発行する（同時呼び出しでも取り合いにならない）。
+  const own = executeOwn();
+  return withTimeout(own, TOKEN_TIMEOUT_MS).catch((e: unknown) => {
+    // 時間切れ後に遅れて届いたトークンは次回用に温存する（再試行を即通すため）。
+    own.then(
+      (t) => {
+        if (t && !prefetched) prefetched = { token: t, at: Date.now() };
+      },
+      () => {},
+    );
+    throw e instanceof Error ? e : new Error(String(e));
+  });
 }
 
 /**
@@ -220,5 +250,6 @@ export function takeReadyTurnstileToken(): string | null {
 export function prefetchTurnstileToken(): void {
   if (!SITE_KEY) return;
   if (prefetched && Date.now() - prefetched.at < PREFETCH_TTL_MS) return;
-  void runOnce().catch(() => {});
+  prefetchClaimed = false;
+  void startPrefetch().catch(() => {});
 }
