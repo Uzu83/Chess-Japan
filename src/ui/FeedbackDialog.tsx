@@ -11,7 +11,6 @@ import {
   CHESS_FEEDBACK_KINDS,
   FEEDBACK_BROWSERS,
   FEEDBACK_DEVICES,
-  getFeedbackFormUrl,
   submitFeedback,
   type ChessFeedbackKind,
   type FeedbackBrowser,
@@ -63,7 +62,6 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
 
   if (!open) return null;
 
-  const formUrl = getFeedbackFormUrl();
   const disabled = busy || sent;
 
   const resetAndClose = () => {
@@ -154,18 +152,6 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
               送信内容は非公開で、オーナーだけが読みます。個人情報や秘密情報は書かないでください。
             </p>
 
-            {formUrl && (
-              <p className="text-xs text-muted">
-                <a
-                  className="font-medium text-ai underline"
-                  href={formUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Google Formでも送れます
-                </a>
-              </p>
-            )}
             <label className="block text-xs text-muted">
               種類（必須）
               <select
@@ -279,15 +265,6 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
             >
               {busy ? '送信中…' : '送信する'}
             </button>
-
-            {formUrl && (
-              <p className="text-center text-xs text-subtle">
-                または{' '}
-                <a className="text-ai underline" href={formUrl} target="_blank" rel="noreferrer">
-                  Google フォーム
-                </a>
-              </p>
-            )}
           </form>
         )}
       </div>
