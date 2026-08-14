@@ -1,18 +1,23 @@
 # フィードバック導線
 
-## 正（推奨）: アプリ内送信 → 公開 GitHub Issue
+## 正（推奨）: アプリ内送信 → 非公開 Firestore（feedback-adcd2）
 
 - UI: ヘッダー「フィードバック」→ [`FeedbackDialog`](../src/ui/FeedbackDialog.tsx)
-- API: Edge Function `feedback`（契約: [`docs/feedback/ISSUE_CONTRACT.md`](./feedback/ISSUE_CONTRACT.md)）
-- 運用: [`docs/operator/feedback-runbook.md`](./operator/feedback-runbook.md)
-- 自動 draft PR: オーナーが `agent-fix` を付けたときのみ（[`docs/feedback/CURSOR_AUTOMATION.md`](./feedback/CURSOR_AUTOMATION.md)）
+- クライアント: [`src/feedback/client.ts`](../src/feedback/client.ts) → `@tosagiken/feedback-web`（[`vendor/`](../vendor/)）
+- 手順の正（全プロダクト共通）: `~/development/projects/feedback-platform/docs/CONNECT.md`
+- 分析: Firebase コンソール / `feedback-platform/docs/ANALYST.md`
 
-送信前に「公開 GitHub Issue になる」同意が必須。メールアドレス欄は無い（PII 防止）。
-局面（FEN/SFEN 等）は対局・レビュー中ならプリフィルされ、編集・消去できる。
+送信内容は **非公開**（オーナーのみ）。返信希望（メール）は当面受け付けない。
+局面（FEN/SFEN 等）は対局・レビュー中ならプリフィルされ、本文へ畳んで保存される。
+
+| 環境 | 書き込み先 |
+|---|---|
+| local / preview（`VITE_FEEDBACK_TARGET` 未設定） | `feedback_dev` |
+| Pages 本番（`VITE_FEEDBACK_TARGET=prod`） | `feedback` |
 
 ## フォールバック: Google フォーム
 
-Edge 未設定・レート超過・GitHub 障害時は `VITE_FEEDBACK_URL` / `FEEDBACK_FALLBACK_URL` の Form へ誘導。
+Firebase 未設定・ネットワーク障害・rules 拒否時は `VITE_FEEDBACK_URL` の Form へ誘導。
 
 ### Gemini プロンプト（フォーム作成用・任意）
 
@@ -36,5 +41,10 @@ Edge 未設定・レート超過・GitHub 障害時は `VITE_FEEDBACK_URL` / `FE
 
 ### アプリ連携
 
-- Form URL を `VITE_FEEDBACK_URL`（フロント）と `FEEDBACK_FALLBACK_URL`（Edge secret）に設定
-- Edge が使えるときはダイアログが優先。Form のみのときは従来どおり外部リンク
+- Firebase Web config を `VITE_FEEDBACK_FIREBASE_*`（フロント・Pages）に設定
+- Form URL を `VITE_FEEDBACK_URL` に設定（フォールバック）
+- Firestore が使えるときはダイアログが優先。Form のみのときは外部リンク
+
+## レガシー
+
+Edge Function `feedback` → 公開 GitHub Issue は **フロントから呼ばない**。契約文書は [`docs/feedback/ISSUE_CONTRACT.md`](./feedback/ISSUE_CONTRACT.md)。undeploy は別タスク。

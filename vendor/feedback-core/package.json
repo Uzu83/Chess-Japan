@@ -1,0 +1,13 @@
+{
+  "name": "@tosagiken/feedback-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "全プロダクト共通のフィードバック契約（スキーマ・検証・同意）。UI も DB も知らない純粋層。",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["src"]
+}
