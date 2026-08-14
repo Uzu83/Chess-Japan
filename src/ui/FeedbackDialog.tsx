@@ -1,24 +1,23 @@
 /*
  * FeedbackDialog.tsx — アプリ内フィードバック送信
  *
- * v1: 公開 GitHub Issue 起票のみ（Cloud Agent / draft PR は v2・agent-fix）。
- * 送信前に「内容は公開 Issue になる」同意が必須（Codex blocker）。
+ * 受信箱は feedback-adcd2（非公開 Firestore）。公開 GitHub Issue には載せない。
+ * 障害時のみ VITE_FEEDBACK_URL（Google Form）へ誘導。
  * 局面欄は対局/レビューが登録した FEN/SFEN をプリフィル（編集可）。
  */
 import { useEffect, useState } from 'react';
+import { formatFeedbackBoardPaste, getFeedbackBoardContext } from '../feedback/boardContext';
 import {
+  CHESS_FEEDBACK_KINDS,
   FEEDBACK_BROWSERS,
   FEEDBACK_DEVICES,
-  FEEDBACK_KINDS,
-  contextFromBoardPaste,
+  submitFeedback,
+  type ChessFeedbackKind,
   type FeedbackBrowser,
   type FeedbackDevice,
-  type FeedbackKind,
-} from '../../supabase/functions/_shared/feedbackValidate';
-import { formatFeedbackBoardPaste, getFeedbackBoardContext } from '../feedback/boardContext';
-import { getFeedbackFormUrl, submitFeedback } from '../feedback/client';
+} from '../feedback/client';
 
-const KIND_LABELS: Record<FeedbackKind, string> = {
+const KIND_LABELS: Record<ChessFeedbackKind, string> = {
   bug: 'バグ報告',
   feature: '機能のリクエスト',
   explain_quality: '解説の品質',
@@ -41,16 +40,15 @@ const BROWSER_LABELS: Record<FeedbackBrowser, string> = {
 };
 
 export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [kind, setKind] = useState<FeedbackKind>('bug');
+  const [kind, setKind] = useState<ChessFeedbackKind>('bug');
   const [message, setMessage] = useState('');
   const [repro, setRepro] = useState('');
   const [boardPaste, setBoardPaste] = useState('');
   const [device, setDevice] = useState<FeedbackDevice | ''>('');
   const [browser, setBrowser] = useState<FeedbackBrowser | ''>('');
-  const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [issueUrl, setIssueUrl] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
 
   // open のたびに局面スナップショットをプリフィル（前回送信の残骸は捨てる）。
@@ -58,14 +56,13 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
     if (!open) return;
     setBoardPaste(formatFeedbackBoardPaste(getFeedbackBoardContext()));
     setError(null);
-    setIssueUrl(null);
+    setSent(false);
     setFallbackUrl(null);
   }, [open]);
 
   if (!open) return null;
 
-  const formUrl = getFeedbackFormUrl();
-  const disabled = busy || Boolean(issueUrl);
+  const disabled = busy || sent;
 
   const resetAndClose = () => {
     setKind('bug');
@@ -74,10 +71,9 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
     setBoardPaste('');
     setDevice('');
     setBrowser('');
-    setConsent(false);
     setBusy(false);
     setError(null);
-    setIssueUrl(null);
+    setSent(false);
     setFallbackUrl(null);
     onClose();
   };
@@ -90,15 +86,13 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
       const result = await submitFeedback({
         kind,
         message,
-        consentPublic: consent,
         repro: repro.trim() || undefined,
+        boardPaste: boardPaste.trim() || undefined,
         device: device || undefined,
         browser: browser || undefined,
-        pageUrl: typeof window !== 'undefined' ? window.location.href : undefined,
-        context: contextFromBoardPaste(boardPaste),
       });
       if (result.ok) {
-        setIssueUrl(result.issueUrl);
+        setSent(true);
         return;
       }
       setError(result.error);
@@ -135,17 +129,9 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
           </button>
         </div>
 
-        {issueUrl ? (
+        {sent ? (
           <div className="flex flex-col gap-3">
-            <p className="text-sm text-on-surface">送信ありがとうございました。</p>
-            <a
-              className="focus-ai text-sm font-medium text-ai underline"
-              href={issueUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              作成された Issue を開く
-            </a>
+            <p className="text-sm text-on-surface">送信しました。ありがとうございます。</p>
             <button
               type="button"
               onClick={resetAndClose}
@@ -162,27 +148,19 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
               void onSubmit();
             }}
           >
-            {formUrl && (
-              <p className="text-xs text-muted">
-                <a
-                  className="font-medium text-ai underline"
-                  href={formUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Google Formでも送れます
-                </a>
-              </p>
-            )}
+            <p className="text-xs text-muted">
+              送信内容は非公開で、オーナーだけが読みます。個人情報や秘密情報は書かないでください。
+            </p>
+
             <label className="block text-xs text-muted">
               種類（必須）
               <select
                 value={kind}
                 disabled={disabled}
-                onChange={(e) => setKind(e.target.value as FeedbackKind)}
+                onChange={(e) => setKind(e.target.value as ChessFeedbackKind)}
                 className="focus-ai mt-1 min-h-11 w-full rounded-lg border border-border bg-surface px-3 text-sm text-on-surface"
               >
-                {FEEDBACK_KINDS.map((k) => (
+                {CHESS_FEEDBACK_KINDS.map((k) => (
                   <option key={k} value={k}>
                     {KIND_LABELS[k]}
                   </option>
@@ -264,21 +242,6 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
               </label>
             </div>
 
-            <label className="flex items-start gap-2 text-xs text-on-surface">
-              <input
-                type="checkbox"
-                checked={consent}
-                disabled={disabled}
-                onChange={(e) => setConsent(e.target.checked)}
-                className="mt-0.5"
-                required
-              />
-              <span>
-                送信内容は公開の GitHub Issue
-                としてリポジトリに掲載されます。個人情報や秘密情報を含めないことに同意します。
-              </span>
-            </label>
-
             {error && (
               <div className="flex flex-col gap-2" role="status">
                 <p className="text-xs text-[var(--q-miss-fg)]">{error}</p>
@@ -297,20 +260,11 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
 
             <button
               type="submit"
-              disabled={disabled || !consent || !message.trim()}
+              disabled={disabled || !message.trim()}
               className="focus-ai min-h-11 rounded-lg bg-ai px-3 text-sm font-medium text-white disabled:opacity-50"
             >
               {busy ? '送信中…' : '送信する'}
             </button>
-
-            {formUrl && (
-              <p className="text-center text-xs text-subtle">
-                または{' '}
-                <a className="text-ai underline" href={formUrl} target="_blank" rel="noreferrer">
-                  Google フォーム
-                </a>
-              </p>
-            )}
           </form>
         )}
       </div>

@@ -1,66 +1,172 @@
 /*
- * feedback/client.ts — Edge Function `feedback` 呼び出し
+ * feedback/client.ts — feedback-adcd2（Firestore）への送信
  *
- * WHY env を関数で読むか: explain/client.ts と同じ（import 時固定を避け vitest stubEnv 可能に）。
- * 真の信頼境界はサーバ。ここは送信前の補助検証 + UX。
+ * 手順の正: ~/development/projects/feedback-platform/docs/CONNECT.md
+ *
+ * WHY Edge GitHub Issue をやめたか:
+ *   公開 Issue は書きにくく受信箱も露出する。共通非公開 Firestore へ寄せる。
+ *   create のみ・named app feedback-adcd2・wantsReply は当面 false 固定。
+ *
+ * WHY vendor 経由か:
+ *   file:../feedback-platform は Cloudflare Pages で親ディレクトリが無く壊れる。
  */
-import { formatExplainNetworkError } from '../explain/errors';
-import { getTurnstileToken } from '../explain/turnstile';
 import {
-  type FeedbackKind,
-  type FeedbackPayload,
-  validateFeedbackBody,
-} from '../../supabase/functions/_shared/feedbackValidate';
+  initFeedbackFirestore,
+  submitFeedback as submitFeedbackDoc,
+  type FeedbackTarget,
+} from '@tosagiken/feedback-web';
+import type { FeedbackKind as FirestoreFeedbackKind } from '@tosagiken/feedback-core';
+import type { Firestore } from 'firebase/firestore';
 
-export type { FeedbackKind, FeedbackPayload };
+/** UI 用。Firestore 共通 kind に無い explain_quality を含む。 */
+export const CHESS_FEEDBACK_KINDS = ['bug', 'feature', 'explain_quality', 'ux', 'other'] as const;
+export type ChessFeedbackKind = (typeof CHESS_FEEDBACK_KINDS)[number];
 
-function supabaseUrl(): string | undefined {
-  return import.meta.env.VITE_SUPABASE_URL as string | undefined;
+/** 旧 UI 互換の別名。 */
+export type FeedbackKind = ChessFeedbackKind;
+
+export const FEEDBACK_DEVICES = ['phone', 'tablet', 'pc'] as const;
+export type FeedbackDevice = (typeof FEEDBACK_DEVICES)[number];
+
+export const FEEDBACK_BROWSERS = ['chrome', 'safari', 'firefox', 'edge', 'other'] as const;
+export type FeedbackBrowser = (typeof FEEDBACK_BROWSERS)[number];
+
+const PRODUCT = 'chess-japan';
+const SCREEN = 'feedback-modal';
+
+function env(name: keyof ImportMetaEnv): string | undefined {
+  const v = import.meta.env[name];
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
 }
-function supabaseAnon(): string | undefined {
-  return import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-}
+
 function feedbackFormUrl(): string | undefined {
-  return import.meta.env.VITE_FEEDBACK_URL as string | undefined;
-}
-
-/** アプリ内送信（Edge）が使えるか。 */
-export function isFeedbackBackendConfigured(): boolean {
-  return Boolean(supabaseUrl() && supabaseAnon());
+  return env('VITE_FEEDBACK_URL');
 }
 
 /** Google Form 等のフォールバック URL。 */
 export function getFeedbackFormUrl(): string | undefined {
-  const u = feedbackFormUrl();
-  return u && u.length > 0 ? u : undefined;
+  return feedbackFormUrl();
 }
 
-/** フィードバック導線を出すか（Edge か Form のどちらか）。 */
+/** Firebase Web config が揃っているか。 */
+export function isFeedbackBackendConfigured(): boolean {
+  return Boolean(
+    env('VITE_FEEDBACK_FIREBASE_API_KEY') &&
+    env('VITE_FEEDBACK_FIREBASE_AUTH_DOMAIN') &&
+    env('VITE_FEEDBACK_FIREBASE_PROJECT_ID') &&
+    env('VITE_FEEDBACK_FIREBASE_APP_ID') &&
+    env('VITE_FEEDBACK_FIREBASE_MESSAGING_SENDER_ID') &&
+    env('VITE_FEEDBACK_FIREBASE_STORAGE_BUCKET'),
+  );
+}
+
+/** フィードバック導線を出すか（Firestore か Form のどちらか）。 */
 export function isFeedbackAvailable(): boolean {
   return isFeedbackBackendConfigured() || Boolean(getFeedbackFormUrl());
 }
 
+/** Pages 本番だけ VITE_FEEDBACK_TARGET=prod。それ以外は省略 → feedback_dev。 */
+export function resolveFeedbackTarget(): FeedbackTarget | undefined {
+  return env('VITE_FEEDBACK_TARGET') === 'prod' ? 'prod' : undefined;
+}
+
+/**
+ * UI kind → Firestore kind。explain_quality は other + 本文プレフィックス。
+ * 共有スキーマにプロダクト固有 kind を足さない（CONNECT）。
+ */
+export function mapChessKindToFirestore(kind: ChessFeedbackKind): {
+  kind: FirestoreFeedbackKind;
+  messagePrefix: string | null;
+} {
+  if (kind === 'explain_quality') {
+    return { kind: 'other', messagePrefix: '[解説の品質]' };
+  }
+  return { kind, messagePrefix: null };
+}
+
+export type BuildFeedbackMessageInput = {
+  message: string;
+  kind: ChessFeedbackKind;
+  repro?: string;
+  boardPaste?: string;
+  device?: FeedbackDevice;
+  browser?: FeedbackBrowser;
+};
+
+/** 局面・再現・端末などスキーマ外フィールドを本文へ畳む。 */
+export function buildFeedbackMessage(input: BuildFeedbackMessageInput): string {
+  const { messagePrefix } = mapChessKindToFirestore(input.kind);
+  const parts: string[] = [];
+  const body = input.message.trim();
+  if (messagePrefix) {
+    parts.push(messagePrefix + (body ? ` ${body}` : ''));
+  } else if (body) {
+    parts.push(body);
+  }
+
+  const repro = input.repro?.trim();
+  if (repro) parts.push(`---\n再現手順:\n${repro}`);
+
+  const board = input.boardPaste?.trim();
+  if (board) parts.push(`---\n局面・棋譜:\n${board}`);
+
+  const meta: string[] = [];
+  if (input.device) meta.push(`端末: ${input.device}`);
+  if (input.browser) meta.push(`ブラウザ: ${input.browser}`);
+  if (meta.length > 0) parts.push(`---\n${meta.join(' / ')}`);
+
+  // Firestore messageMax=2000。超過は末尾を切る（本文優先で先頭を残す）。
+  const joined = parts.join('\n\n').trim();
+  return joined.length <= 2000 ? joined : joined.slice(0, 2000);
+}
+
+export type FeedbackSubmitInput = {
+  kind: ChessFeedbackKind;
+  message: string;
+  repro?: string;
+  boardPaste?: string;
+  device?: FeedbackDevice;
+  browser?: FeedbackBrowser;
+  appVersion?: string;
+};
+
 export type FeedbackSubmitResult =
-  { ok: true; issueUrl: string } | { ok: false; error: string; fallbackUrl?: string };
+  { ok: true; id: string } | { ok: false; error: string; fallbackUrl?: string };
+
+let dbCache: Firestore | null = null;
+
+function getDb(): Firestore {
+  if (dbCache) return dbCache;
+  const { db } = initFeedbackFirestore({
+    apiKey: env('VITE_FEEDBACK_FIREBASE_API_KEY')!,
+    authDomain: env('VITE_FEEDBACK_FIREBASE_AUTH_DOMAIN')!,
+    projectId: env('VITE_FEEDBACK_FIREBASE_PROJECT_ID')!,
+    appId: env('VITE_FEEDBACK_FIREBASE_APP_ID')!,
+    messagingSenderId: env('VITE_FEEDBACK_FIREBASE_MESSAGING_SENDER_ID')!,
+    storageBucket: env('VITE_FEEDBACK_FIREBASE_STORAGE_BUCKET')!,
+  });
+  dbCache = db;
+  return db;
+}
+
+/** テスト用に DB キャッシュを捨てる。 */
+export function resetFeedbackDbCacheForTests(): void {
+  dbCache = null;
+}
 
 /**
  * フィードバック送信。
- * Edge 未設定時は Form URL があればそれを fallback として返す（呼び側で開く）。
+ * Firestore 未設定時は Form URL があればそれを fallback として返す。
  */
-export async function submitFeedback(
-  input: Omit<FeedbackPayload, 'consentPublic'> & { consentPublic: boolean },
-): Promise<FeedbackSubmitResult> {
-  if (!input.consentPublic) {
-    return { ok: false, error: '公開 Issue への同意が必要です' };
-  }
-
-  const validated = validateFeedbackBody({ ...input, consentPublic: true });
-  if (!validated.ok) {
-    return { ok: false, error: validated.error, fallbackUrl: getFeedbackFormUrl() };
+export async function submitFeedback(input: FeedbackSubmitInput): Promise<FeedbackSubmitResult> {
+  const fallbackUrl = getFeedbackFormUrl();
+  const mapped = mapChessKindToFirestore(input.kind);
+  const message = buildFeedbackMessage(input);
+  if (!message) {
+    return { ok: false, error: '内容を入力してください', fallbackUrl };
   }
 
   if (!isFeedbackBackendConfigured()) {
-    const fallbackUrl = getFeedbackFormUrl();
     return {
       ok: false,
       error: 'feedback ingest unavailable',
@@ -68,62 +174,31 @@ export async function submitFeedback(
     };
   }
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${supabaseAnon()}`,
-  };
-  /*
-   * 人間確認は失敗しうる（未完了のまま時間切れ・挑戦の失敗）。
-   * WHY try で包むか（GPT 監査 2026-08-13 P2）: turnstile.ts に時間切れを入れたことで
-   *   getTurnstileToken() が reject するようになった。ここは fetch の try の外なので、
-   *   握らないと FeedbackDialog（try/finally のみ）を素通りして未処理の rejection になり、
-   *   ユーザーにはエラーもフォールバック URL も出ないまま送信が消える。
-   */
-  let turnstileToken: string | null = null;
   try {
-    turnstileToken = await getTurnstileToken();
-  } catch (err) {
-    return {
-      ok: false,
-      error: formatExplainNetworkError(err),
-      fallbackUrl: getFeedbackFormUrl(),
-    };
-  }
-  if (turnstileToken) headers['x-turnstile-token'] = turnstileToken;
-
-  let res: Response;
-  try {
-    res = await fetch(`${supabaseUrl()}/functions/v1/feedback`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(validated.value),
-    });
+    const db = getDb();
+    const target = resolveFeedbackTarget();
+    const result = await submitFeedbackDoc(
+      db,
+      {
+        product: PRODUCT,
+        kind: mapped.kind,
+        message,
+        screen: SCREEN,
+        platform: 'web',
+        appVersion: input.appVersion,
+        wantsReply: false,
+      },
+      target ? { target } : {},
+    );
+    if (!result.ok) {
+      return { ok: false, error: result.error, fallbackUrl };
+    }
+    return { ok: true, id: result.id };
   } catch {
     return {
       ok: false,
-      error: 'network error',
-      fallbackUrl: getFeedbackFormUrl(),
+      error: '送信に失敗しました。時間をおいて再度お試しください。',
+      fallbackUrl,
     };
   }
-
-  let data: { ok?: boolean; issueUrl?: string; error?: string; fallbackUrl?: string };
-  try {
-    data = (await res.json()) as typeof data;
-  } catch {
-    return {
-      ok: false,
-      error: `feedback API error: ${res.status}`,
-      fallbackUrl: getFeedbackFormUrl(),
-    };
-  }
-
-  if (res.ok && data.ok && data.issueUrl) {
-    return { ok: true, issueUrl: data.issueUrl };
-  }
-
-  return {
-    ok: false,
-    error: data.error ?? `feedback API error: ${res.status}`,
-    fallbackUrl: data.fallbackUrl ?? getFeedbackFormUrl(),
-  };
 }

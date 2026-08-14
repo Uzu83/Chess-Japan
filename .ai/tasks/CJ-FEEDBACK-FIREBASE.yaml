@@ -1,0 +1,110 @@
+# ============================================================================
+# TASK-CONTRACT — Chess-Japan → Firebase feedback 接続
+# 手順の正: ~/development/projects/feedback-platform/docs/CONNECT.md
+# ============================================================================
+
+task_id: CJ-FEEDBACK-FIREBASE
+title: フィードバック送信を feedback-adcd2（Firestore）へ切替
+
+intent:
+  actors: [end_user, owner]
+  problem: |
+    現行のアプリ内フィードバックは公開 GitHub Issue へ載る。ユーザーが書きにくく、
+    受信箱もリポ Issue 面に露出する。共通の非公開 Firestore（feedback-adcd2）へ寄せる。
+  desired_outcome: |
+    アプリ内送信が feedback-adcd2 に create される。開発は feedback_dev、
+    Pages 本番のみ target prod。障害時だけ Google Form。GitHub Issue 導線は止める。
+  unknowns: []
+
+desired_state: |
+  FeedbackDialog から Edge feedback を呼ばない。
+  initFeedbackFirestore + submitFeedback のみで chess-japan の文書が作られる。
+  wantsReply は常に false。screen は静的ラベル feedback-modal。
+  VITE_FEEDBACK_TARGET=prod のときだけ本番 feedback コレクション。
+
+constraints:
+  - CONNECT.md を破らない（named app、projectId 検証、create のみ、相乗り禁止）
+  - explain の Turnstile / レート / キャッシュを触らない
+  - プラポリ本文は触らない
+  - Edge feedback 関数は削除しない（フロントから呼ばないだけ）
+  - vendor は feedback-platform コミットからコピーし勝手に改変しない
+  - PR 必須（main 直禁止）
+
+out_of_scope:
+  - App Check / TTL / wantsReply 再開
+  - Edge feedback の undeploy / secrets 削除
+  - QM #72–#74
+  - 他プロダクト接続
+
+acceptance_criteria:
+  - id: ac-vendor
+    statement: 'vendor/feedback-core と vendor/feedback-web が file: 依存で解決し、FEEDBACK_PLATFORM_COMMIT が記録されている'
+    how_to_verify: package.json + vendor/ + npm ls
+  - id: ac-submit-dev
+    statement: 'Firebase config あり・TARGET 未設定なら submit は feedback_dev 向け（target 省略）'
+    how_to_verify: unit test（submitFeedback 呼び出し引数）
+  - id: ac-submit-prod
+    statement: "VITE_FEEDBACK_TARGET=prod のときだけ { target: 'prod' } を渡す"
+    how_to_verify: unit test
+  - id: ac-kind-map
+    statement: 'UI の explain_quality は Firestore kind other + 本文先頭 [解説の品質]'
+    how_to_verify: unit test
+  - id: ac-no-public-consent
+    statement: '公開 Issue 同意チェックが無く、成功時に Issue URL を出さない'
+    how_to_verify: FeedbackDialog 目視 / 文字列 grep
+  - id: ac-form-fallback
+    statement: '未設定・throw・失敗時に VITE_FEEDBACK_URL を fallback できる'
+    how_to_verify: unit test
+  - id: ac-verify
+    statement: 'npm run verify が通る'
+    how_to_verify: npm run verify
+
+exploration:
+  entrypoints:
+    - ~/development/projects/feedback-platform/docs/CONNECT.md
+    - src/feedback/client.ts
+    - src/ui/FeedbackDialog.tsx
+  landmines:
+    - file:../feedback-platform は Pages で壊れる → vendor 必須
+    - screen に pathname を載せない
+    - ホスト Firebase への相乗り禁止
+
+plan:
+  steps:
+    - vendor コピー + package.json
+    - client 差し替え
+    - Dialog UI
+    - env/docs
+    - テスト + verify
+  risks:
+    - lockfile 変更は人間ゲート
+    - Pages に VITE_* 未投入だと Form フォールバックのみ
+
+assignment:
+  agent: implementer
+  lane: write-1
+  worktree: null
+
+owned_paths:
+  - vendor/**
+  - package.json
+  - package-lock.json
+  - src/feedback/**
+  - src/ui/FeedbackDialog.tsx
+  - src/vite-env.d.ts
+  - .env.example
+  - docs/feedback-form.md
+  - docs/operator/feedback-runbook.md
+  - docs/feedback/ISSUE_CONTRACT.md
+  - CLAUDE.md
+  - .ai/tasks/CJ-FEEDBACK-FIREBASE.yaml
+  - .ai/STATE.md
+
+required_evidence:
+  - unit test
+  - npm run verify
+  - feedback_dev 手動1通（人間 or ローカル env があるとき）
+
+risk_tier: standard
+status: verifying
+blocked_reason: null

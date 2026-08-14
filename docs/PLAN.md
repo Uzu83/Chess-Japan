@@ -213,12 +213,12 @@ PoC で**作らない**もの（後続フェーズ）: 将棋対応・AI対局/�
 - **1. Ko-fi（いま）**: 外部リンクのみ（`VITE_KOFI_URL`）。決済連携・PII 不要。UI はヘッダー「支援する」。
 - **2. Stripe サブスク（次）**: 有料プランで Pro 解説枠。モデルはサーバー側のみ決定。課金キーは手動承認。未実装。
 - **3. AdSense（後回し）**: 月間数千 PV まで入れない。COEP 両立・CSP・同意管理が前提。入れるならフッター1枠のみ。
-- **フィードバック導線**: アプリ内ダイアログ（Edge `feedback`）＋ Form フォールバック（`VITE_FEEDBACK_URL`）。
+- **フィードバック導線**: アプリ内ダイアログ（Firestore `feedback-adcd2`）＋ Form フォールバック（`VITE_FEEDBACK_URL`）。手順は feedback-platform/docs/CONNECT.md。
 - 主要コスト＝LLM のみ → キャッシュ＋最安プロバイダ＋レート制限で最小化し、Ko-fi →（将来）Stripe で回収。
 
 ## 環境変数の設定（スマホ/リモート前提）
 `.env` ファイルは git に入れず（gitignore 済み）、本番値は各 Web ダッシュボードで設定する（スマホブラウザで可）。
-- **フロント公開変数 `VITE_*`**（`VITE_FEEDBACK_URL` / `VITE_KOFI_URL` / `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`）
+- **フロント公開変数 `VITE_*`**（`VITE_FEEDBACK_FIREBASE_*` / `VITE_FEEDBACK_URL` / `VITE_KOFI_URL` / `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`）
   → **Cloudflare Pages → Settings → Environment variables** に設定。**秘密ではない**（公開JSに焼き込まれる）。Supabase anon key/URL は公開前提で可（DB は RLS で保護）。
 - **バックエンド秘密 `XAI_API_KEY`(Grok) など**
   → **Supabase の Secrets のみ**（`supabase secrets set` or ダッシュボード）。ブラウザにも git にも出さない。Edge Function プロキシ経由で利用。

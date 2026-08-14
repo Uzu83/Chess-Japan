@@ -1,6 +1,10 @@
-# Feedback Issue 契約（schema v1）
+# Feedback Issue 契約（schema v1）— レガシー
 
-横展開用の共通契約。受信箱は **公開 GitHub Issue**。Supabase テーブルは使わない。
+> **Chess-Japan の現行受信箱は Firebase `feedback-adcd2`（非公開 Firestore）。**  
+> 手順の正: `~/development/projects/feedback-platform/docs/CONNECT.md`  
+> 本ファイルは Edge `feedback` → 公開 GitHub Issue 時代の契約。フロント本番導線は使わない。
+
+横展開用の共通契約（旧）。受信箱は **公開 GitHub Issue**。Supabase テーブルは使わない。
 
 Cloud Agent / draft PR はオーナーが `agent-fix` を付けたときのみ（レシピ: [`CURSOR_AUTOMATION.md`](./CURSOR_AUTOMATION.md)）。
 
