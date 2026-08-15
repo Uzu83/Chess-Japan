@@ -3,6 +3,7 @@ import type { ExplanationContext, GameKind } from '../core/types';
 import { qualityLabelJa } from '../core/classify';
 import { uciToSan, uciLineToSan } from '../core/notation';
 import { isProRequiredExplainMessage } from '../explain/errors';
+import { isTurnstileEnabled, setTurnstileMountHost, TURNSTILE_HOST_ID } from '../explain/turnstile';
 import { evalLabel } from './evalLabel';
 
 /*
@@ -38,6 +39,24 @@ export interface ChatTurn {
 }
 
 export type ExplainDepth = 'standard' | 'deep';
+
+/** #72: Turnstile を解説パネル内へ載せるホスト。右下の不可視ドット問題の根治。 */
+function TurnstilePanelHost() {
+  useEffect(() => {
+    if (!isTurnstileEnabled()) return;
+    const el = document.getElementById(TURNSTILE_HOST_ID);
+    setTurnstileMountHost(el);
+    return () => setTurnstileMountHost(null);
+  }, []);
+  if (!isTurnstileEnabled()) return null;
+  return (
+    <div
+      id={TURNSTILE_HOST_ID}
+      className="min-h-[4.5rem] w-full rounded-lg border border-dashed border-border bg-surface-2/60 px-2 py-2"
+      aria-label="ボット対策の確認エリア"
+    />
+  );
+}
 
 interface ExplanationPanelProps {
   context: ExplanationContext | null;
@@ -227,6 +246,7 @@ export function ExplanationPanel({
 
   return (
     <div className="flex flex-col gap-3">
+      <TurnstilePanelHost />
       {/* ── 評価メタ情報 ── */}
       <div className="flex flex-wrap items-center gap-2">
         {context.quality && <QualityBadge quality={context.quality} />}

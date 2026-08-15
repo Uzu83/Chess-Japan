@@ -16,13 +16,14 @@ const BODY_JA: Record<string, string> = {
   'rate limiter unavailable':
     '混雑のため一時的に利用できません。しばらくしてから再試行してください',
   'turnstile failed':
-    'ボット対策の確認に失敗しました。ページを再読み込みしてから再試行してください',
-  'turnstile required': 'ボット対策の確認が必要です。ページを再読み込みしてから再試行してください',
+    'ボット対策の確認に失敗しました。解説パネル内の確認をもう一度試すか、ページを再読み込みしてください',
+  'turnstile required':
+    'ボット対策の確認が必要です。解説パネル内の「あなたは人間ですか」を完了してから再試行してください',
   unauthorized: 'ログインの有効期限が切れている可能性があります。再ログインしてください',
   'invalid depth': '解説の設定が不正です',
   'invalid json': 'リクエストの形式が不正です',
   'bot protection required':
-    'ボット対策の確認が必要です。ページを再読み込みしてから再試行してください',
+    'ボット対策の確認が必要です。解説パネル内の確認を完了してから再試行してください',
   'payload too large': 'リクエストが大きすぎます。棋譜や履歴を減らして再試行してください',
   'upstream failed': 'AI側で一時的な障害が発生しました。しばらくしてから再試行してください',
   'origin not allowed': 'このページからの解説リクエストは許可されていません',
@@ -70,7 +71,7 @@ export function formatExplainNetworkError(err: unknown): string {
    * ユーザーが固まった実害（本番 QA 2026-08-13）への対処なので、汎用文言に混ぜない。
    */
   if (/turnstile timeout/i.test(msg))
-    return '画面右下の「あなたは人間ですか」の確認を完了してください。完了してから再試行すると解説が表示されます';
+    return '解説パネル内の「あなたは人間ですか」の確認を完了してください。完了してから再試行すると解説が表示されます';
   if (/turnstile/i.test(msg)) return BODY_JA['turnstile failed']!;
   if (/failed to fetch/i.test(msg) || err instanceof TypeError) {
     return NETWORK_ERROR_JA;
