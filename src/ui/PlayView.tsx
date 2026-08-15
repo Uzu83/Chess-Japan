@@ -224,8 +224,8 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
         games: 0,
       },
   );
-  // 設定画面の選択(既定=レート戦。オーナー構想「カジュアルはレートが変動しない」の対になる既定)
-  const [ratedChoice, setRatedChoice] = useState(true);
+  // 設定画面の選択(既定=カジュアル。#85: 初見1局目で頼んでないレート変動を起こさない)
+  const [ratedChoice, setRatedChoice] = useState(false);
   // 進行中の対局がレート戦か(開始時に確定。ref で非同期処理からも読める)
   const activeRatedRef = useRef(false);
   // この対局で「待った」を使ったか → 使ったらレート変動なしに降格

@@ -1,0 +1,24 @@
+task_id: CJ-QM-FIXES
+title: QM Issue #72–#86 小PR分割修正
+status: in_progress
+parent_issue: 75
+plan_ref: qm_issues_small_prs_0a9fa1fb
+risk_tier: standard
+constraints:
+  - Edge Turnstile/レート/キャッシュ順を緩めない
+  - 対局フル再開はしない（unfinished 保存のみ）
+  - プロダクト名ドメイン改名はしない
+  - GPT Review Clean 必須でマージ
+prs:
+  - { id: PR1, issues: [85], status: pending }
+  - { id: PR2, issues: [84], status: pending }
+  - { id: PR3, issues: [86], status: pending }
+  - { id: PR4, issues: [81], status: pending }
+  - { id: PR5, issues: [72], status: pending }
+  - { id: PR6, issues: [73], status: pending }
+  - { id: PR7, issues: [74, 83], status: pending }
+  - { id: PR8, issues: [76], status: pending }
+  - { id: PR9, issues: [82], status: pending }
+  - { id: PR10, issues: [77], status: pending }
+  - { id: PR11, issues: [80], status: pending }
+  - { id: PR12, issues: [78, 79], status: pending }

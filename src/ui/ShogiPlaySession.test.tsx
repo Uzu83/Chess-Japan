@@ -124,12 +124,31 @@ async function waitForStartEnabled(): Promise<HTMLElement> {
   return startBtn;
 }
 
+/** #85: 既定はカジュアル。レート戦テストは明示選択してから開始する。 */
+async function startRatedGame(): Promise<void> {
+  await waitForStartEnabled();
+  fireEvent.click(screen.getByRole('button', { name: /レート戦/ }));
+  fireEvent.click(await waitForStartEnabled());
+}
+
 describe('ShogiPlaySession 状態機械', () => {
+  it('初見の既定はカジュアル（レート戦は明示選択）', async () => {
+    render(<ShogiPlaySession onReview={onReview} />);
+    await waitForStartEnabled();
+    expect(screen.getByRole('button', { name: /カジュアル/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByRole('button', { name: /レート戦/ })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
   it('レート戦で開始即投了(0手): 履歴は保存されないがレートは下がる（逃げ得防止）', async () => {
     render(<ShogiPlaySession onReview={onReview} />);
-    const startBtn = await waitForStartEnabled();
-    // 既定=レート戦・先手で開始（AI 応手なし＝chooseMove は null）。
-    fireEvent.click(startBtn);
+    // レート戦・先手で開始（AI 応手なし＝chooseMove は null）。
+    await startRatedGame();
     // 投了する。
     fireEvent.click(await screen.findByRole('button', { name: '投了' }));
 
@@ -172,9 +191,7 @@ describe('ShogiPlaySession 状態機械', () => {
 
   it('カジュアルで投了してもレートは動かない（保存もされない）', async () => {
     render(<ShogiPlaySession onReview={onReview} />);
-    await waitForStartEnabled();
-    // 「カジュアル」を選んでから開始。
-    fireEvent.click(screen.getByRole('button', { name: /カジュアル/ }));
+    // 既定=カジュアルのまま開始（#85）
     fireEvent.click(await waitForStartEnabled());
     fireEvent.click(await screen.findByRole('button', { name: '投了' }));
 
@@ -201,8 +218,8 @@ describe('ShogiPlaySession 状態機械', () => {
   it('待った を使うとレート戦でもレートが動かない（公平性・降格）', async () => {
     engineChooseMove.mockResolvedValue('3c3d'); // AI(後手)の応手 ☖３四歩
     render(<ShogiPlaySession onReview={onReview} />);
-    // 既定=レート戦・先手で開始。
-    fireEvent.click(await waitForStartEnabled());
+    // レート戦・先手で開始。
+    await startRatedGame();
     // あなた(先手)が ☗７六歩。board スタブが捕まえた onUserMove を直接呼ぶ（盤操作の代わり）。
     await waitFor(() => expect(boardHolder.props).not.toBeNull());
     await act(async () => {
