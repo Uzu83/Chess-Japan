@@ -39,9 +39,11 @@ export function ProUpgradeDialog({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
-  // Escape で閉じる + 開いたらパネルへフォーカス（#84）
+  // Escape で閉じる + 開いたらパネルへフォーカス、閉じたら元の要素へ戻す（Codex #90 major）
   useEffect(() => {
     if (!open) return;
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -57,6 +59,10 @@ export function ProUpgradeDialog({
     return () => {
       document.removeEventListener('keydown', onKey);
       cancelAnimationFrame(id);
+      // 閉じたあとフォーカスを開く前の要素へ戻す（パネル削除で body に落ちないように）
+      if (previouslyFocused && document.contains(previouslyFocused)) {
+        previouslyFocused.focus();
+      }
     };
   }, [open]);
 
