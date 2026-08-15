@@ -6,7 +6,11 @@
  *   - 将棋オンライン個人: 体験〜単発 ¥1,000〜2,000、月4回で数千〜1万円台も
  * Pro ¥480/月は「先生の代わり」ではなく「いつでも棋譜を振り返る補助」として安さを伝える。
  * 誇大比較を避けるため具体校名・「◯倍安い」断定は出さない。
+ *
+ * #84: Escape / 背景クリックで閉じられること（初見レビューで課金壁に閉じ込めない）。
+ *   現行コードにレビュー入場時の自動 open 経路は無い（深掘り 402 / Pro ボタン押下のみ）。
  */
+import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
 export function ProUpgradeDialog({
@@ -31,6 +35,31 @@ export function ProUpgradeDialog({
   confirmLabel?: string;
   busyLabel?: string;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  // Escape で閉じる + 開いたらパネルへフォーカス（#84）
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onCloseRef.current();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    // 次フレームでフォーカス（ポータル描画後）
+    const id = requestAnimationFrame(() => {
+      panelRef.current?.focus();
+    });
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      cancelAnimationFrame(id);
+    };
+  }, [open]);
+
   if (!open) return null;
 
   return createPortal(
@@ -43,10 +72,12 @@ export function ProUpgradeDialog({
           onClick={onClose}
         />
         <div
+          ref={panelRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby="pro-upgrade-title"
-          className="relative z-10 w-full max-w-md animate-[fade-rise_220ms_ease-out] rounded-3xl border border-border bg-surface p-6 shadow-card-hover"
+          tabIndex={-1}
+          className="relative z-10 w-full max-w-md animate-[fade-rise_220ms_ease-out] rounded-3xl border border-border bg-surface p-6 shadow-card-hover outline-none"
         >
           <div className="mb-4 flex items-start justify-between gap-3">
             <div>
