@@ -817,9 +817,15 @@ function ShogiSetupScreen({
 
         <button
           type="button"
-          onClick={onStart}
+          onClick={() => {
+            // #86: disabled でも見た目だけ灰に見える誤認対策として、準備前は明示ガード
+            if (!engineReady) return;
+            onStart();
+          }}
           disabled={!engineReady}
-          className="focus-ai min-h-12 rounded-xl bg-ai px-6 text-base font-semibold text-white shadow-btn hover:bg-ai-hover motion-safe:transition-all motion-safe:hover:-translate-y-0.5 motion-safe:hover:shadow-card-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none dark:bg-ai-dim dark:hover:bg-ai"
+          aria-busy={engineKind === 'loading' || undefined}
+          aria-disabled={!engineReady}
+          className="focus-ai min-h-12 rounded-xl bg-ai px-6 text-base font-semibold text-white shadow-btn hover:bg-ai-hover motion-safe:transition-all motion-safe:hover:-translate-y-0.5 motion-safe:hover:shadow-card-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none disabled:hover:translate-y-0 dark:bg-ai-dim dark:hover:bg-ai"
         >
           {engineKind === 'loading'
             ? 'エンジン読み込み中…（初回は数秒かかることがあります）'
