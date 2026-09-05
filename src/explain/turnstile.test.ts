@@ -113,7 +113,7 @@ describe('prefetchTurnstileScript', () => {
     const first = getTurnstileToken();
     await Promise.resolve();
     await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(12_000);
+    await vi.advanceTimersByTimeAsync(25_000);
     await expect(first).rejects.toThrow(/turnstile timeout/);
 
     const second = getTurnstileToken();
@@ -122,6 +122,35 @@ describe('prefetchTurnstileScript', () => {
     callback?.('token-retry');
     await expect(second).resolves.toBe('token-retry');
     vi.useRealTimers();
+  });
+
+  it('setTurnstileMountHost すると render 先がパネルホストになる（#72）', async () => {
+    const host = document.createElement('div');
+    host.id = 'cj-turnstile-host';
+    document.body.appendChild(host);
+    const render = vi.fn(() => 'wid');
+    window.turnstile = { render, execute: vi.fn(), reset: vi.fn() };
+
+    const { setTurnstileMountHost, getTurnstileToken, prefetchTurnstileScript, TURNSTILE_HOST_ID } =
+      await loadTurnstile('test-site-key');
+    expect(TURNSTILE_HOST_ID).toBe('cj-turnstile-host');
+    setTurnstileMountHost(host);
+    prefetchTurnstileScript();
+    document.querySelector(`script[src*="${SCRIPT_HINT}"]`)!.dispatchEvent(new Event('load'));
+    await Promise.resolve();
+
+    const pending = getTurnstileToken();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(render).toHaveBeenCalled();
+    // Mock の calls は引数タプルを [] と推論しうるため、unknown 経由で取り出す。
+    const firstArgs = render.mock.calls[0] as unknown as [HTMLElement] | undefined;
+    expect(firstArgs).toBeDefined();
+    const mountEl = firstArgs![0];
+    expect(host.contains(mountEl)).toBe(true);
+    pending.catch(() => {});
+    setTurnstileMountHost(null);
+    host.remove();
   });
 });
 

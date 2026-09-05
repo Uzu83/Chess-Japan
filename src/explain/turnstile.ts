@@ -32,6 +32,8 @@ declare global {
 let scriptPromise: Promise<void> | null = null;
 let widgetId: string | null = null;
 let container: HTMLElement | null = null;
+/** ExplanationPanel 等が用意する可視ホスト（#72）。無い間は body 右下へフォールバック。 */
+let preferredHost: HTMLElement | null = null;
 // 実行中の execute の解決先。Turnstile の callback がここへ token を届ける。
 let pending: { resolve: (t: string) => void; reject: (e: Error) => void; gen: number } | null =
   null;
@@ -48,10 +50,33 @@ let chain: Promise<unknown> = Promise.resolve();
  *   getTurnstileToken() の Promise が解決しないままになる。本番 QA で、解説が
  *   「AI が解説を生成中です…」のまま無限に回り続ける事象として観測された（実際は人間確認待ち）。
  *   時間切れを設けて呼び出し側へ制御を返し、ユーザーへ何をすべきか伝えられるようにする。
- *   12 秒: 挑戦が出ない通常ケース（数百 ms）には十分すぎる余裕があり、かつ人間が
- *   「固まった」と感じる前に案内を出せる長さ。
+ *   25 秒（#72）: 解説パネル内に挑戦が出たあと、人間が確認を完了する余裕。
+ *   自動通過の通常ケース（数百 ms）には十分すぎる。
  */
-const TOKEN_TIMEOUT_MS = 12_000;
+const TOKEN_TIMEOUT_MS = 25_000;
+
+/** 解説パネル等がマウントするホストの id（ensureWidget が優先参照）。 */
+export const TURNSTILE_HOST_ID = 'cj-turnstile-host';
+
+/**
+ * Turnstile ウィジェットの親を解説パネル内へ向ける（#72）。
+ * 既に右下へ render 済みなら破棄して次の execute でホストへ描き直す。
+ */
+export function setTurnstileMountHost(el: HTMLElement | null): void {
+  preferredHost = el;
+  if (!widgetId) return;
+  // 親が変わったら作り直す（render 先は一度きり）。
+  try {
+    if (window.turnstile && widgetId) {
+      // Turnstile API に remove が無い環境もあるので DOM だけ外す。
+      container?.remove();
+    }
+  } catch {
+    /* ignore */
+  }
+  widgetId = null;
+  container = null;
+}
 
 /*
  * 先回り取得したトークンを有効とみなす時間。Turnstile のトークンは単発使用・300 秒で失効するため、
@@ -114,13 +139,30 @@ function loadScript(): Promise<void> {
 /** ウィジェットを1度だけ生成（execute モード・interaction-only）。 */
 function ensureWidget(): void {
   if (widgetId || !window.turnstile || !SITE_KEY) return;
-  // 暫定配置（デザイン未確定）: 画面右下に固定。interaction-only なので通常は不可視、挑戦が要るときだけ出る。
+  /*
+   * #72: 解説パネル内ホストを優先。無ければ body 右下（フィードバック等のフォールバック）。
+   * interaction-only でも親に最小サイズが無いと 4px ドットだけになり「右下を見ろ」と
+   * 言われても何も無い、という本番 QA の症状になる。
+   */
+  const host =
+    preferredHost ??
+    (typeof document !== 'undefined' ? document.getElementById(TURNSTILE_HOST_ID) : null);
   container = document.createElement('div');
-  container.style.position = 'fixed';
-  container.style.bottom = '8px';
-  container.style.right = '8px';
-  container.style.zIndex = '9999';
-  document.body.appendChild(container);
+  container.setAttribute('data-cj-turnstile', '1');
+  if (host) {
+    container.style.minHeight = '65px';
+    container.style.display = 'flex';
+    container.style.justifyContent = 'center';
+    host.replaceChildren(container);
+  } else {
+    container.style.position = 'fixed';
+    container.style.bottom = '8px';
+    container.style.right = '8px';
+    container.style.zIndex = '9999';
+    container.style.minHeight = '65px';
+    container.style.minWidth = '300px';
+    document.body.appendChild(container);
+  }
   widgetId = window.turnstile.render(container, {
     sitekey: SITE_KEY,
     execution: 'execute',

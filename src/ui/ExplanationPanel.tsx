@@ -3,6 +3,7 @@ import type { ExplanationContext, GameKind } from '../core/types';
 import { qualityLabelJa } from '../core/classify';
 import { uciToSan, uciLineToSan } from '../core/notation';
 import { isProRequiredExplainMessage } from '../explain/errors';
+import { isTurnstileEnabled, setTurnstileMountHost, TURNSTILE_HOST_ID } from '../explain/turnstile';
 import { evalLabel } from './evalLabel';
 
 /*
@@ -38,6 +39,24 @@ export interface ChatTurn {
 }
 
 export type ExplainDepth = 'standard' | 'deep';
+
+/** #72: Turnstile を解説パネル内へ載せるホスト。右下の不可視ドット問題の根治。 */
+function TurnstilePanelHost() {
+  useEffect(() => {
+    if (!isTurnstileEnabled()) return;
+    const el = document.getElementById(TURNSTILE_HOST_ID);
+    setTurnstileMountHost(el);
+    return () => setTurnstileMountHost(null);
+  }, []);
+  if (!isTurnstileEnabled()) return null;
+  return (
+    <div
+      id={TURNSTILE_HOST_ID}
+      className="min-h-[4.5rem] w-full rounded-lg border border-dashed border-border bg-surface-2/60 px-2 py-2"
+      aria-label="ボット対策の確認エリア"
+    />
+  );
+}
 
 interface ExplanationPanelProps {
   context: ExplanationContext | null;
@@ -112,9 +131,9 @@ function EmptyState() {
 
 /*
  * 「時間がかかっている」と案内を出すまでの秒数。
- * 通常の解説取得は数秒で返る。それを超えるのは (a) LLM が混んでいる (b) 右下の人間確認が
+ * 通常の解説取得は数秒で返る。それを超えるのは (a) LLM が混んでいる (b) 解説パネル内の人間確認が
  * 未完了、のどちらか。(b) はユーザーがウィジェットに気づかないと永久に進まないため、
- * 黙って回し続けずに何をすればいいかを出す（本番 QA 2026-08-13 の無限スピナー対策）。
+ * 黙って回し続けずに何をすればいいかを出す（#72: 旧「右下」案内は廃止。ホストはパネル内）。
  */
 const SLOW_HINT_MS = 6_000;
 
@@ -140,7 +159,7 @@ function SkeletonLoader() {
       <span className="sr-only">AI が解説を生成中です…</span>
       {slow && (
         <p className="text-xs text-muted">
-          時間がかかっています。画面の右下に「あなたは人間ですか」の確認が出ていたら、それを完了すると解説が続きます。
+          時間がかかっています。このパネル内の「あなたは人間ですか」の確認が出ていたら、それを完了すると解説が続きます。
         </p>
       )}
     </div>
@@ -227,6 +246,7 @@ export function ExplanationPanel({
 
   return (
     <div className="flex flex-col gap-3">
+      <TurnstilePanelHost />
       {/* ── 評価メタ情報 ── */}
       <div className="flex flex-wrap items-center gap-2">
         {context.quality && <QualityBadge quality={context.quality} />}
