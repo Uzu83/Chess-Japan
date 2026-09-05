@@ -143,7 +143,10 @@ describe('prefetchTurnstileScript', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(render).toHaveBeenCalled();
-    const mountEl = render.mock.calls[0]![0] as HTMLElement;
+    // Mock の calls は引数タプルを [] と推論しうるため、unknown 経由で取り出す。
+    const firstArgs = render.mock.calls[0] as unknown as [HTMLElement] | undefined;
+    expect(firstArgs).toBeDefined();
+    const mountEl = firstArgs![0];
     expect(host.contains(mountEl)).toBe(true);
     pending.catch(() => {});
     setTurnstileMountHost(null);
