@@ -128,10 +128,12 @@ export interface ShogiPlayConfigParams {
   /** 人間が操作できるか（false で盤ロック）。 */
   movable: boolean;
   /**
-   * events.after を config に含めるか。初期化時のみ true（set で毎回上書きすると多重登録の懸念）。
-   * ※ event body は component 側で ref 越しに最新コールバックを呼ぶ（stale closure 回避）ため引数で受ける。
+   * 着手/打ちの events.after。
+   * WHY 常に渡すか（#73）: shogiground 0.10.3 は `set()` で events を省略すると
+   * 既存ハンドラを落とす（chessground は保持する）。初期化時だけ渡して更新時に外すと、
+   * 2局目やタブ往復後にクリックが死ぬ。コールバック本体は component 側で ref 越しに
+   * 最新を呼ぶため、毎回同じ関数参照を渡しても多重登録・stale closure にはならない。
    */
-  withEvents: boolean;
   onMoveAfter: (orig: Key, dest: Key) => void;
   onDropAfter: (piece: { role: string }, key: Key) => void;
 }
@@ -177,13 +179,13 @@ export function buildShogiPlayConfig(p: ShogiPlayConfigParams): Config {
       free: false, // 合法手のみ
       dests: p.legalDests as MoveDests,
       showDests: true,
-      ...(p.withEvents ? { events: { after: p.onMoveAfter } } : {}),
+      events: { after: p.onMoveAfter },
     },
     droppable: {
       free: false, // 合法な打ちのみ
       dests: toDropDests(p.dropDests, p.turnColor),
       showDests: true,
-      ...(p.withEvents ? { events: { after: p.onDropAfter } } : {}),
+      events: { after: p.onDropAfter },
     },
     // 内蔵の成りダイアログは使わない（自前ピッカーへ統一）。全経路で成りを自動発火させない。
     promotion: {

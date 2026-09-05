@@ -22,8 +22,10 @@ import './shogiBoard.css';
  *
  * shogiground との接続（ShogiBoard/PlayBoard と同じ「初期化1回 + api.set() 差分」）:
  *   - 初期化は一度だけ。以降 props 変化は api.set() で差分反映。
- *   - 着手/打ちハンドラ(movable/droppable の events.after)は初期化時に1つだけ登録し、中身は
- *     ref 経由で最新のコールバックを呼ぶ（stale closure 回避）。
+ *   - 着手/打ちハンドラは **毎回** config に載せる（#73）。shogiground 0.10.3 は set で events を
+ *     省略するとハンドラを落とす。中身は ref 経由で最新コールバックを呼ぶ（stale closure 回避）。
+ *   - display:none から復帰するとヒットテストの bounds が古いことがあるため、visible 復帰時に
+ *     もう一度 set する（shogiground に redrawAll は無い）。
  *
  * 成り（プロモーション）:
  *   shogiground には内蔵の成りダイアログがあるが、PlayBoard(チェス) と同じモーダルイディオムへ
@@ -52,6 +54,11 @@ interface ShogiPlayBoardProps {
    * false のとき activeColor を外して盤をロックする（誤操作防止）。
    */
   movable: boolean;
+  /**
+   * 盤が画面上で見えるか（対局タブ表示かつ将棋 kind）。
+   * false→true で set し直し、hidden 復帰後のヒットテストずれを直す（#73）。
+   */
+  visible?: boolean;
   /** from→to が成り/不成の選択を要するか（親=ShogiPlayGame の needsPromotionChoice）。 */
   needsPromotionChoice: (from: string, to: string) => boolean;
   /** 盤上の着手を確定したときに呼ばれる。 */
@@ -69,18 +76,20 @@ export function ShogiPlayBoard({
   legalDests,
   dropDests,
   movable,
+  visible = true,
   needsPromotionChoice,
   onUserMove,
   onUserDrop,
 }: ShogiPlayBoardProps) {
   const elRef = useRef<HTMLDivElement>(null);
   const apiRef = useRef<Api | null>(null);
+  const prevVisibleRef = useRef(visible);
 
   // 成り待ち（from/to を保持し、成る/不成の選択後に確定）。
   const [pending, setPending] = useState<{ from: string; to: string } | null>(null);
 
   // ── stale closure 回避用 ref ────────────────────────────────
-  // events.after は初期化時に一度だけ登録するので、最新のコールバック/判定を ref 越しに呼ぶ。
+  // events.after は set のたびに同じ関数参照を渡すが、最新のコールバック/判定は ref 越し。
   const needsPromoRef = useRef(needsPromotionChoice);
   needsPromoRef.current = needsPromotionChoice;
   const onUserMoveRef = useRef(onUserMove);
@@ -88,11 +97,7 @@ export function ShogiPlayBoard({
   const onUserDropRef = useRef(onUserDrop);
   onUserDropRef.current = onUserDrop;
 
-  // 現在 props から shogiground 設定を組む（初期化・更新で共用）。設定の中身は module-level の
-  // pure 関数 buildShogiPlayConfig に切り出し（テスト可能化・見た目不変条件の回帰ガード）、
-  // ここでは event body（ref 越しに最新コールバックを呼ぶ = stale closure 回避）だけ与える。
-  // ※ events は初期化時のみ渡す（set で毎回上書きすると多重登録の懸念があるため withEvents で制御）。
-  const buildConfig = (withEvents: boolean): Config =>
+  const buildConfig = (): Config =>
     buildShogiPlayConfig({
       sfen,
       orientation,
@@ -102,7 +107,6 @@ export function ShogiPlayBoard({
       legalDests,
       dropDests,
       movable,
-      withEvents,
       onMoveAfter: (orig, dest) => {
         const from = orig as string;
         const to = dest as string;
@@ -119,7 +123,7 @@ export function ShogiPlayBoard({
   // ── 初期化（一度だけ） ─────────────────────────────────────
   useEffect(() => {
     if (!elRef.current) return;
-    apiRef.current = Shogiground(buildConfig(true), { board: elRef.current });
+    apiRef.current = Shogiground(buildConfig(), { board: elRef.current });
     return () => {
       apiRef.current?.destroy();
       apiRef.current = null;
@@ -130,9 +134,19 @@ export function ShogiPlayBoard({
 
   // ── props 変化を盤へ反映 ────────────────────────────────────
   useEffect(() => {
-    apiRef.current?.set(buildConfig(false));
+    apiRef.current?.set(buildConfig());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sfen, orientation, turnColor, inCheck, lastMoveUsi, legalDests, dropDests, movable]);
+
+  // display:none 復帰後のヒットテストずれ対策（#73）。shogiground に redrawAll は無い。
+  useEffect(() => {
+    const wasHidden = !prevVisibleRef.current;
+    prevVisibleRef.current = visible;
+    if (visible && wasHidden) {
+      apiRef.current?.set(buildConfig());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
 
   // 盤がロックされたら（AI手番/終局）、開きっぱなしの成りピッカーを閉じる（PlayBoard と同じ防御）。
   useEffect(() => {

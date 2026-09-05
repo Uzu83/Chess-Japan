@@ -3,11 +3,17 @@
 // WHY / 設計（2026-07-01）:
 //   バックエンド(explain Edge Function)は「課金キーがある環境」で Turnstile を必須検証する（docs/COST_DEFENSE.md #2）。
 //   Turnstile トークンは “単発使用・300秒で失効”。局面ごとに解説を投げるこのアプリでは 1 トークン使い回しができないので、
-//   execute モードで「リクエスト毎に reset→execute して新トークン」を取る。バックエンドは変更不要（既に毎回検証）。
+//   execute モードで「リクエスト毎に（必要なら）reset→execute して新トークン」を取る。バックエンドは変更不要（既に毎回検証）。
 //   VITE_TURNSTILE_SITE_KEY 未設定なら完全 no-op（dev/preview・キー無し環境でフローを壊さない＝ローカル解説に落ちる）。
 //   appearance:'interaction-only' なので、bot 疑い時だけウィジェットが可視化（人間はほぼ何も見えない）。
 //   ※ 配置/見た目（どこに出すか）は後でデザインで詰める前提。ここではまず“正しい配線”を確定する。
 //   API 出典: Cloudflare Turnstile client-side rendering（explicit / execution:'execute' / reset / execute）。
+//
+// #93（2026-09-06）: 解説成功後の追問で Turnstile が一瞬出て消える不具合。
+//   - setTurnstileMountHost が同一 HTMLElement でも tear-down していた（パネル remount / Strict Mode）。
+//   - execute が毎回 reset→execute し、interaction-only でフラッシュしていた。
+//   - アプリ側タイムアウトで即 reset し、表示中の挑戦を潰していた。
+//   同一ホストは no-op、reset はトークン消費後のみ、タイムアウトでは世代無効化だけにしてホストを残す。
 
 const SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined;
 const SCRIPT_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
@@ -32,8 +38,14 @@ declare global {
 let scriptPromise: Promise<void> | null = null;
 let widgetId: string | null = null;
 let container: HTMLElement | null = null;
-/** ExplanationPanel 等が用意する可視ホスト（#72）。無い間は body 右下へフォールバック。 */
+/** ExplanationPanel 等が用意する可視ホスト（#72 / #93）。無い間は body 右下へフォールバック。 */
 let preferredHost: HTMLElement | null = null;
+/**
+ * 直前の挑戦が完了（成功/失敗/CF timeout）したあと、次の execute 前に reset が必要。
+ * WHY (#93): 毎回 reset すると interaction-only が一瞬フラッシュして消える。
+ *   新規 render 直後は reset 不要。トークンを1つ使い切ったあとだけ reset する。
+ */
+let needsReset = false;
 // 実行中の execute の解決先。Turnstile の callback がここへ token を届ける。
 let pending: { resolve: (t: string) => void; reject: (e: Error) => void; gen: number } | null =
   null;
@@ -59,23 +71,43 @@ const TOKEN_TIMEOUT_MS = 25_000;
 export const TURNSTILE_HOST_ID = 'cj-turnstile-host';
 
 /**
- * Turnstile ウィジェットの親を解説パネル内へ向ける（#72）。
- * 既に右下へ render 済みなら破棄して次の execute でホストへ描き直す。
+ * Turnstile ウィジェットの親を解説パネル内へ向ける（#72 / #93）。
+ *
+ * - 新しい host が **いまの preferredHost と同じ HTMLElement** なら no-op（#93）。
+ *   React Strict Mode や explain→chat のレイアウト再マウントで effect が再走しても、
+ *   進行中の挑戦や render 済み widget を壊さない。
+ * - null 解除でも container がまだ document に繋がっているなら tear-down しない
+ *   （Strict Mode の cleanup→直後の同一ノード再登録で挑戦を潰さない）。
+ * - ホストが本当に変わった／DOM から消えたときだけ tear-down。次の ensureWidget で描き直す。
  */
 export function setTurnstileMountHost(el: HTMLElement | null): void {
+  if (el === preferredHost) return;
+
+  // 同一ホストへの再登録（soft null のあと）: widget がまだその配下なら付け直すだけ。
+  if (el && widgetId && container && el.contains(container)) {
+    preferredHost = el;
+    return;
+  }
+
+  // Strict Mode cleanup: ノードはまだ生きているのに null される。widget は残す。
+  if (el === null && container?.isConnected) {
+    preferredHost = null;
+    return;
+  }
+
   preferredHost = el;
   if (!widgetId) return;
-  // 親が変わったら作り直す（render 先は一度きり）。
+
   try {
-    if (window.turnstile && widgetId) {
-      // Turnstile API に remove が無い環境もあるので DOM だけ外す。
-      container?.remove();
-    }
+    // Turnstile API に remove が無い環境もあるので DOM だけ外す。
+    container?.remove();
   } catch {
     /* ignore */
   }
   widgetId = null;
   container = null;
+  // ホストごと捨てたので次は新規 render。reset は不要。
+  needsReset = false;
 }
 
 /*
@@ -140,9 +172,8 @@ function loadScript(): Promise<void> {
 function ensureWidget(): void {
   if (widgetId || !window.turnstile || !SITE_KEY) return;
   /*
-   * #72: 解説パネル内ホストを優先。無ければ body 右下（フィードバック等のフォールバック）。
-   * interaction-only でも親に最小サイズが無いと 4px ドットだけになり「右下を見ろ」と
-   * 言われても何も無い、という本番 QA の症状になる。
+   * #72/#93: 解説パネル内ホストを優先。無ければ body 右下（フィードバック等のフォールバック）。
+   * interaction-only でも親に最小サイズが無いと挑戦 UI が一瞬で消えて見えることがある。
    */
   const host =
     preferredHost ??
@@ -169,23 +200,29 @@ function ensureWidget(): void {
     appearance: 'interaction-only',
     callback: (token: string) => {
       if (!pending || pending.gen !== challengeGen) return;
+      needsReset = true;
       pending.resolve(token);
       pending = null;
     },
     'error-callback': () => {
       if (!pending || pending.gen !== challengeGen) return;
+      needsReset = true;
       pending.reject(new Error('Turnstile challenge failed'));
       pending = null;
     },
     'timeout-callback': () => {
       if (!pending || pending.gen !== challengeGen) return;
+      needsReset = true;
       pending.reject(new Error('Turnstile timed out'));
       pending = null;
     },
   });
 }
 
-/** 実際に reset→execute してトークンを1つ発行させる（直列化前の生の処理）。 */
+/**
+ * トークンを1つ発行させる（直列化前の生の処理）。
+ * 前回トークンを使い切っているときだけ reset。新規 render 直後は execute のみ（#93）。
+ */
 async function execute(): Promise<string | null> {
   await loadScript();
   ensureWidget();
@@ -194,7 +231,10 @@ async function execute(): Promise<string | null> {
   return await new Promise<string>((resolve, reject) => {
     pending = { resolve, reject, gen };
     try {
-      window.turnstile!.reset(widgetId!); // 前回トークンを破棄して新しい挑戦へ
+      if (needsReset) {
+        window.turnstile!.reset(widgetId!);
+        needsReset = false;
+      }
       window.turnstile!.execute(container!);
     } catch (e) {
       pending = null;
@@ -211,6 +251,10 @@ async function execute(): Promise<string | null> {
  *   鎖に残った execute が後から挑戦を追加で出してしまう。
  *   時間切れしたら鎖は解放する（GPT 監査 2026-08-13 P2）。挑戦が永久に終わらないとき
  *   running を待ち続けると、再試行もフィードバックもハングして時間切れの意味が消える。
+ *
+ * #93: アプリ側タイムアウトでは **reset しない**。表示中の挑戦を潰すと「一瞬出て消える」になり、
+ *   追問の 2 回目 execute でもホスト上の widget が使えなくなる。世代だけ進めて古い callback を無効化し、
+ *   次の execute で needsReset 経由の reset→execute に任せる。
  */
 function executeOwn(): Promise<string | null> {
   const prev = chain;
@@ -222,11 +266,8 @@ function executeOwn(): Promise<string | null> {
     return withTimeout(running, TOKEN_TIMEOUT_MS).catch((e: unknown) => {
       challengeGen += 1;
       pending = null;
-      try {
-        if (widgetId && window.turnstile) window.turnstile.reset(widgetId);
-      } catch {
-        /* reset 失敗でも鎖は解放する */
-      }
+      // 次の再試行で reset できるようにする（今は表示中の挑戦を壊さない）。
+      needsReset = true;
       throw e instanceof Error ? e : new Error(String(e));
     });
   };
@@ -242,7 +283,7 @@ function executeOwn(): Promise<string | null> {
 /**
  * リクエスト毎の新鮮な Turnstile トークンを取得する。
  *   - site key 未設定なら null（＝ヘッダを付けない。バックエンドも非課金環境では検証 skip）。
- *   - トークンは単発使用なので毎回 reset→execute で新規発行し、callback 経由で受け取る。
+ *   - トークンは単発使用なので、消費後は reset→execute で新規発行し、callback 経由で受け取る。
  *   - 直列化（chain）で同時実行を防ぐ（pending スロットは1つ）。
  *   - TOKEN_TIMEOUT_MS を超えたら `turnstile timeout` で reject し、呼び出し側が案内を出せるようにする。
  */

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ExplanationContext, GameKind } from '../core/types';
 import { qualityLabelJa } from '../core/classify';
 import { uciToSan, uciLineToSan } from '../core/notation';
@@ -40,17 +40,31 @@ export interface ChatTurn {
 
 export type ExplainDepth = 'standard' | 'deep';
 
-/** #72: Turnstile を解説パネル内へ載せるホスト。右下の不可視ドット問題の根治。 */
+/*
+ * #72 / #93: Turnstile を解説パネル内へ載せるホスト。
+ *
+ * WHY ref + 同一ノード no-op 前提か:
+ *   explain→chat でパネル内レイアウトが変わっても、このホスト自体は常に同じ位置に置く。
+ *   cleanup で setTurnstileMountHost(null) しても、Strict Mode 再マウントがすぐ同じ node を
+ *   再登録すれば turnstile.ts 側の identity no-op で widget を壊さない。
+ *   （ホストノードが本当に消える unmount では tear-down してよい。）
+ */
 function TurnstilePanelHost() {
+  const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!isTurnstileEnabled()) return;
-    const el = document.getElementById(TURNSTILE_HOST_ID);
+    const el = ref.current;
+    if (!el) return;
     setTurnstileMountHost(el);
-    return () => setTurnstileMountHost(null);
+    return () => {
+      // 別ホストへ既に付け替わっていれば触らない（後続 effect が勝っている）。
+      setTurnstileMountHost(null);
+    };
   }, []);
   if (!isTurnstileEnabled()) return null;
   return (
     <div
+      ref={ref}
       id={TURNSTILE_HOST_ID}
       className="min-h-[4.5rem] w-full rounded-lg border border-dashed border-border bg-surface-2/60 px-2 py-2"
       aria-label="ボット対策の確認エリア"
@@ -246,6 +260,7 @@ export function ExplanationPanel({
 
   return (
     <div className="flex flex-col gap-3">
+      {/* #72/#93: 解説→追問のレイアウト変化でもホストを先頭に固定（widget tear-down 防止） */}
       <TurnstilePanelHost />
       {/* ── 評価メタ情報 ── */}
       <div className="flex flex-wrap items-center gap-2">
