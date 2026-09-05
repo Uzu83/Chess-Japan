@@ -1,21 +1,22 @@
 # Chess-Japan — Orchestrator State
 
 writer: Orchestrator only  
-updated: 2026-08-14
+updated: 2026-08-15
 
 ## Active
 
-- **CJ-FEEDBACK-FIREBASE** (ready_for_push): フィードバックを `feedback-adcd2` へ接続
-  - 契約: `.ai/tasks/CJ-FEEDBACK-FIREBASE.yaml`
-  - 証拠: `.ai/evidence/CJ-FEEDBACK-FIREBASE-quality-gate.md`
-  - ブランチ: `auto/feedback-firebase-2026-08-14`
-  - smoke: `feedback_dev/18bb911c-fb15-4207-93bf-d43012f649ba`
-  - 次: Codex Clean → push/PR → CI → merge → Pages env
+- **CJ-QM-FIXES**: Open QM Issues #72–#86 を小 PR 分割で修正中（親 #75）
+  - 計画: `.cursor/plans/qm_issues_small_prs_0a9fa1fb.plan.md`
+  - 順: #85 → #84 → #86 → #81 → #72 → #73 → #74+#83 → #76 → #82 → #77 → #80 → #78+#79 → close #75
+  - 各 PR: verify + GPT Review Clean (Sol xhigh blocker 0) → merge
+
+## Done (recent)
+
+- **CJ-FEEDBACK-FIREBASE**: feedback-adcd2 接続完了（PR #87 `efc1f03`）
 
 ## Parked
 
-- **CJ-QM-TRIAGE**: #72/#73/#74 採用裁定済み。実装は未着手
-  - #72 Turnstile UI / #73 shogi events / #74 コピー+中断保存（再開は延期）
+- （なし）
 
 ## Do not
 

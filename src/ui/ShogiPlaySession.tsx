@@ -170,7 +170,8 @@ export default function ShogiPlaySession({ onReview, playFrom }: ShogiPlaySessio
   // 設定
   const [colorChoice, setColorChoice] = useState<ColorChoice>('sente');
   const [difficulty, setDifficulty] = useState<Difficulty>(DIFFICULTIES[0]); // 既定 やさしい
-  const [ratedChoice, setRatedChoice] = useState(true);
+  // 既定=カジュアル（#85: 初見1局目で頼んでないレート変動を起こさない。チェス PlayView と対称）
+  const [ratedChoice, setRatedChoice] = useState(false);
 
   // 進行中の対局で確定した値（ref で非同期処理から最新を読む）
   const [youColor, setYouColor] = useState<ShogiColor>('sente');
