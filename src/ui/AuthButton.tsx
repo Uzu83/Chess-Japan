@@ -4,7 +4,7 @@
  * disabled → 非表示 / anonymous → ログイン / signedIn → メニュー
  * メニューに退会を含む。無料ユーザーには Pro 案内（BillingButtons と同じ Checkout 経路）。
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useAuth } from '../auth/authState';
 import { isBillingConfigured, startCheckout } from '../billing/client';
 import { loadRating } from '../core/storage';
@@ -24,6 +24,8 @@ export function AuthButton({
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingErr, setBillingErr] = useState<string | null>(null);
+  /** メニュー内 Pro 導線は開くとメニューごと消えるため、閉じたあとここに戻す（Codex #90 medium）。 */
+  const accountBtnRef = useRef<HTMLButtonElement>(null);
 
   if (status === 'disabled') return null;
 
@@ -68,6 +70,7 @@ export function AuthButton({
   return (
     <div className="relative">
       <button
+        ref={accountBtnRef}
         type="button"
         aria-expanded={menuOpen}
         aria-haspopup="menu"
@@ -185,6 +188,8 @@ export function AuthButton({
           onClose={() => {
             setUpgradeOpen(false);
             setBillingErr(null);
+            // メニュー項目は既に unmount 済みなので、常設のアカウントボタンへ戻す
+            accountBtnRef.current?.focus();
           }}
           busy={billingBusy}
           error={billingErr}
