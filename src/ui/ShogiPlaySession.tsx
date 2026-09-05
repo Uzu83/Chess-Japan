@@ -467,6 +467,7 @@ export default function ShogiPlaySession({
   }, [snap, youColor]);
 
   // ── リロード/タブ閉じでも 1手以上を unfinished 保存（#74。再開はしない） ──
+  // BFCache (pagehide.persisted) では保存しない — 戻って終局したときの保存を殺さない（Codex major）。
   useEffect(() => {
     const persistUnfinished = () => {
       const game = gameRef.current;
@@ -492,10 +493,14 @@ export default function ShogiPlaySession({
         game: 'shogi',
       });
     };
-    window.addEventListener('pagehide', persistUnfinished);
+    const onPageHide = (e: PageTransitionEvent) => {
+      if (e.persisted) return;
+      persistUnfinished();
+    };
+    window.addEventListener('pagehide', onPageHide);
     window.addEventListener('beforeunload', persistUnfinished);
     return () => {
-      window.removeEventListener('pagehide', persistUnfinished);
+      window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('beforeunload', persistUnfinished);
     };
   }, []);

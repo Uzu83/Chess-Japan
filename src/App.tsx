@@ -38,12 +38,15 @@ function modeFromSearch(): Mode {
   return 'play';
 }
 
-/** history にモードを反映（#82）。play は ?m を消す。#g= は維持。 */
-function writeModeToUrl(m: Mode, method: 'push' | 'replace') {
+/** history にモードを反映（#82）。play は ?m を消す。 */
+function writeModeToUrl(m: Mode, method: 'push' | 'replace', opts?: { clearShareHash?: boolean }) {
   if (typeof window === 'undefined') return;
   const url = new URL(window.location.href);
   if (m === 'play') url.searchParams.delete('m');
   else url.searchParams.set('m', m);
+  // 対局から別棋譜を開いたときは古い #g= を落とす（表示と URL の食い違い防止・Codex major）。
+  // 共有リンク初回オープンや popstate では clearShareHash を付けない。
+  if (opts?.clearShareHash) url.hash = '';
   const next = url.pathname + url.search + url.hash;
   if (method === 'push') window.history.pushState({ mode: m }, '', next);
   else window.history.replaceState({ mode: m }, '', next);
@@ -145,7 +148,8 @@ function App() {
     setReviewKey((k) => k + 1);
     setReviewMounted(true);
     setMode('review');
-    writeModeToUrl('review', 'push');
+    // 自分の対局を開くので古い共有 #g= は捨てる（表示と URL の一致）。
+    writeModeToUrl('review', 'push', { clearShareHash: true });
   };
 
   // レビューからの「この局面から対局」(Phase 2B: チェス / Phase 4-3: 将棋): 局面を渡して対局へ切り替え。
@@ -162,16 +166,32 @@ function App() {
 
   // タブ切替。レビューを開いたら進行中/直近棋譜を載せる（#76）。history に ?m= を載せる（#82）。
   const switchMode = (m: Mode) => {
+    // 同じタブ再クリックで history を増やさない（Codex nit: Back が同じ review に留まる）。
+    if (m === mode) {
+      if (m === 'review') {
+        const rec = getActiveRecordRef.current?.() ?? null;
+        if (rec) {
+          setReviewRecord(rec);
+          setReviewKey((k) => k + 1);
+          writeModeToUrl('review', 'replace', { clearShareHash: true });
+        }
+      }
+      return;
+    }
     if (m === 'review') {
       setReviewMounted(true);
       const rec = getActiveRecordRef.current?.() ?? null;
       if (rec) {
         setReviewRecord(rec);
         setReviewKey((k) => k + 1);
+        writeModeToUrl(m, 'push', { clearShareHash: true });
+      } else {
+        writeModeToUrl(m, 'push');
       }
+    } else {
+      writeModeToUrl(m, 'push');
     }
     setMode(m);
-    writeModeToUrl(m, 'push');
   };
 
   const closePublicStrength = () => {

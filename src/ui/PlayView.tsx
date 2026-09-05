@@ -507,6 +507,8 @@ export function PlayView({
   // ── リロード/タブ閉じでも 1手以上を unfinished 保存（#74。再開はしない） ──
   // WHY visibilitychange を使わないか: タブ切替でも発火し、savedCurrentRef が立って
   // その後の終局保存がスキップされる。pagehide / beforeunload だけにする。
+  // WHY BFCache (pagehide.persisted) では保存しないか（Codex major）:
+  //   戻って対局を続けたあとの終局保存が savedCurrentRef で死ぬ。BFCache 入りは「まだ生きている」。
   useEffect(() => {
     const persistUnfinished = () => {
       const game = gameRef.current;
@@ -532,10 +534,14 @@ export function PlayView({
         game: 'chess',
       });
     };
-    window.addEventListener('pagehide', persistUnfinished);
+    const onPageHide = (e: PageTransitionEvent) => {
+      if (e.persisted) return;
+      persistUnfinished();
+    };
+    window.addEventListener('pagehide', onPageHide);
     window.addEventListener('beforeunload', persistUnfinished);
     return () => {
-      window.removeEventListener('pagehide', persistUnfinished);
+      window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('beforeunload', persistUnfinished);
     };
   }, []);
