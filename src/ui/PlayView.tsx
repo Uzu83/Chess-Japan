@@ -159,9 +159,25 @@ interface PlayViewProps {
    *   （この playFrom はメモリ上の一時 state で永続化されないためリネームも安全だが、チェス経路無改修を優先）。
    */
   playFrom?: { fen: string; nonce: number; kind: GameKind } | null;
+  /**
+   * App の対局タブが表示中か。将棋盤の hidden 復帰時 redraw に使う（#73）。
+   */
+  boardVisible?: boolean;
+  /**
+   * ヘッダー「レビュー」用に、進行中/直近の棋譜取得関数を登録する（#76）。
+   * unmount 時は null を渡して解除する。
+   */
+  registerActiveRecordGetter?: (
+    getter: (() => { kind: GameKind; text: string } | null) | null,
+  ) => void;
 }
 
-export function PlayView({ onReview, playFrom }: PlayViewProps) {
+export function PlayView({
+  onReview,
+  playFrom,
+  boardVisible = true,
+  registerActiveRecordGetter,
+}: PlayViewProps) {
   // ── ゲーム種別（チェス/将棋 切替・Codex 修正 #1: 共通シェル + kind 別セッション） ──
   // 既定 chess（チェス利用者の体験を一切変えない）。将棋は初回選択時に mount し、以降 hidden で保持
   // （App の reviewMounted と同型。切替で進行中の対局を失わない）。
@@ -187,11 +203,50 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
   const [colorChoice, setColorChoice] = useState<ColorChoice>('white');
   const [difficulty, setDifficulty] = useState<Difficulty>(DIFFICULTIES[0]); // 既定 やさしい
 
+  /** 将棋セッションが登録する進行中棋譜 getter（#76）。 */
+  const shogiActiveGetterRef = useRef<(() => { kind: 'shogi'; text: string } | null) | null>(null);
+  const registerShogiActiveRecordGetter = useCallback(
+    (getter: (() => { kind: 'shogi'; text: string } | null) | null) => {
+      shogiActiveGetterRef.current = getter;
+    },
+    [],
+  );
   // 進行中の対局で確定した自分の色/難度(ref で最新値を非同期処理から参照)
   const [youColor, setYouColor] = useState<PieceColor>('white');
   const youColorRef = useRef<PieceColor>('white');
   youColorRef.current = youColor;
   const activeDifficultyRef = useRef<Difficulty>(difficulty);
+
+  // App ヘッダー「レビュー」用: 進行中 → 直近履歴 → null（サンプル）（#76）
+  useEffect(() => {
+    if (!registerActiveRecordGetter) return;
+    registerActiveRecordGetter(() => {
+      if (kind === 'shogi') {
+        const fromShogi = shogiActiveGetterRef.current?.() ?? null;
+        if (fromShogi) return fromShogi;
+        const hist = loadPlayedGames().filter((g) => playedGameKind(g) === 'shogi');
+        if (hist[0]) return { kind: 'shogi', text: hist[0].pgn };
+        return null;
+      }
+      const game = gameRef.current;
+      if (game && snap && snap.moveCount > 0) {
+        const opponent = `AI (${activeDifficultyRef.current.label})`;
+        const color = youColorRef.current;
+        return {
+          kind: 'chess',
+          text: game.pgn({
+            Event: 'AI 戦',
+            White: color === 'white' ? 'You' : opponent,
+            Black: color === 'black' ? 'You' : opponent,
+          }),
+        };
+      }
+      const hist = loadChessHistory();
+      if (hist[0]) return { kind: 'chess', text: hist[0].pgn };
+      return null;
+    });
+    return () => registerActiveRecordGetter(null);
+  }, [registerActiveRecordGetter, kind, snap]);
 
   const [orientation, setOrientation] = useState<PieceColor>('white');
   const [aiThinking, setAiThinking] = useState(false);
@@ -405,7 +460,40 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
   }, [runAiMove]);
 
   // ── 設定へ戻る(対局を破棄) ──────────────────────────────────
+  /*
+   * #83/#74: 1手以上の進行中対局は確認のうえ unfinished で履歴保存してから破棄する。
+   * 再開はしない（トリアージどおり延期）。0手は保存しない（既存の「振り返る」壊れ防止）。
+   */
   const handleNewGame = useCallback(() => {
+    const game = gameRef.current;
+    const current = snap;
+    if (game && current && !current.outcome.over && current.moveCount > 0) {
+      const ok = window.confirm(
+        '進行中の対局を中断しますか？棋譜は履歴に「中断」として残り、あとから振り返れます。',
+      );
+      if (!ok) return;
+      if (!savedCurrentRef.current) {
+        savedCurrentRef.current = true;
+        const opponent = `AI (${activeDifficultyRef.current.label})`;
+        const pgn = game.pgn({
+          Event: 'AI 戦（中断）',
+          White: youColor === 'white' ? 'You' : opponent,
+          Black: youColor === 'black' ? 'You' : opponent,
+        });
+        const played: PlayedGame = {
+          id: newId(),
+          createdAt: Date.now(),
+          pgn,
+          result: '*',
+          outcome: 'unfinished',
+          youColor,
+          opponent,
+          moveCount: current.moveCount,
+          game: 'chess',
+        };
+        setHistory(savePlayedGame(played).filter((g) => playedGameKind(g) === 'chess'));
+      }
+    }
     ++turnTokenRef.current;
     gameRef.current = null;
     savedCurrentRef.current = false;
@@ -414,6 +502,48 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
     setSnap(null);
     // 履歴を最新化(直前対局が保存されている可能性。チェスのみ表示)
     setHistory(loadChessHistory());
+  }, [snap, youColor]);
+
+  // ── リロード/タブ閉じでも 1手以上を unfinished 保存（#74。再開はしない） ──
+  // WHY visibilitychange を使わないか: タブ切替でも発火し、savedCurrentRef が立って
+  // その後の終局保存がスキップされる。pagehide / beforeunload だけにする。
+  // WHY BFCache (pagehide.persisted) では保存しないか（Codex major）:
+  //   戻って対局を続けたあとの終局保存が savedCurrentRef で死ぬ。BFCache 入りは「まだ生きている」。
+  useEffect(() => {
+    const persistUnfinished = () => {
+      const game = gameRef.current;
+      if (!game || savedCurrentRef.current) return;
+      const s = game.snapshot();
+      if (s.outcome.over || s.moveCount === 0) return;
+      savedCurrentRef.current = true;
+      const opponent = `AI (${activeDifficultyRef.current.label})`;
+      const color = youColorRef.current;
+      savePlayedGame({
+        id: newId(),
+        createdAt: Date.now(),
+        pgn: game.pgn({
+          Event: 'AI 戦（中断）',
+          White: color === 'white' ? 'You' : opponent,
+          Black: color === 'black' ? 'You' : opponent,
+        }),
+        result: '*',
+        outcome: 'unfinished',
+        youColor: color,
+        opponent,
+        moveCount: s.moveCount,
+        game: 'chess',
+      });
+    };
+    const onPageHide = (e: PageTransitionEvent) => {
+      if (e.persisted) return;
+      persistUnfinished();
+    };
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', persistUnfinished);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', persistUnfinished);
+    };
   }, []);
 
   // ── 終局時に履歴へ自動保存 + レート更新 ─────────────────────
@@ -774,7 +904,12 @@ export function PlayView({ onReview, playFrom }: PlayViewProps) {
               />
             }
           >
-            <ShogiPlaySession onReview={onReview} playFrom={shogiPlayFrom} />
+            <ShogiPlaySession
+              onReview={onReview}
+              playFrom={shogiPlayFrom}
+              boardVisible={boardVisible && kind === 'shogi'}
+              registerActiveRecordGetter={registerShogiActiveRecordGetter}
+            />
           </Suspense>
         </div>
       )}
@@ -852,7 +987,7 @@ function SetupScreen({
               元の text-base font-semibold より一段上げることで「入口」感を出す。 */}
           <h2 className="text-lg font-bold text-on-surface">AI と対局</h2>
           <p className="mt-1 text-xs text-muted">
-            ブラウザ上のAI（Stockfish）と対局します。棋譜はこの端末に残り、あとから1手ずつ振り返れます。
+            ブラウザ上のAI（Stockfish）と対局します。終局（投了・詰みなど）した対局は、この端末の履歴に残り、あとから1手ずつ振り返れます。中断した対局も履歴に「中断」として残ります。
           </p>
           {/* あなたのレート(ローカル内部レート)。レート戦の実績がまだ無くても初期値を見せて
               「レートが動く体験」への期待を作る。 */}

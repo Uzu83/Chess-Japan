@@ -330,9 +330,21 @@ export function ReviewView({
         // 単手解析トークンもリセット
         ++analyzeToken.current;
       } catch (e) {
+        // #95: 同じチェス棋譜の読み込み失敗では model を残す（1/0 矛盾防止）。
+        // 種別切替直後など model.kind!=='chess' のときは破棄（盤に SFEN が渡る事故・Codex major）。
         setError(`PGN を読み込めませんでした: ${(e as Error).message}`);
-        setModel(null);
-        setLoadedPgn(null);
+        let clearedMismatch = false;
+        setModel((prev) => {
+          if (prev == null || prev.kind === 'chess') return prev;
+          clearedMismatch = true;
+          return null;
+        });
+        if (clearedMismatch) {
+          setIndex(0);
+          setContexts({});
+          setExplanations({});
+          setThreads({});
+        }
       }
     },
     [], // useState setters は安定 → deps 不要
@@ -382,10 +394,21 @@ export function ReviewView({
       ++analyzeToken.current;
     } catch (e) {
       if (seq !== shogiLoadSeqRef.current || kindRef.current !== 'shogi') return;
+      // #95: 同じ将棋棋譜の失敗では model を残す。チェス model が残っている切替失敗は破棄（Codex major）。
       setError(`将棋の棋譜を読み込めませんでした: ${(e as Error).message}`);
-      setModel(null);
-      setLoadedPgn(null);
-      setLoadedKif(null); // 読み込み失敗時は共有リンクを出さない
+      let clearedMismatch = false;
+      setModel((prev) => {
+        if (prev == null || prev.kind === 'shogi') return prev;
+        clearedMismatch = true;
+        return null;
+      });
+      if (clearedMismatch) {
+        setIndex(0);
+        setContexts({});
+        setExplanations({});
+        setThreads({});
+        setLoadedPgn(null);
+      }
     } finally {
       // ローディング表示は「最新のロード」だけが畳む(古いロードが新しい表示を消さない)
       if (seq === shogiLoadSeqRef.current) setShogiLoading(false);
@@ -1065,6 +1088,16 @@ export function ReviewView({
         >
           お使いのブラウザは将棋エンジン解析に未対応です（盤面の閲覧は可能）。 Chrome / Edge など
           SharedArrayBuffer 対応ブラウザでは 1 手ごとの解析・採点が使えます。
+        </div>
+      )}
+
+      {/* #76: サンプルであることを明示（自分の対局と取り違えない） */}
+      {!initialRecord && kind === 'chess' && loadedPgn === SAMPLE_PGN && (
+        <div
+          role="note"
+          className="mb-4 rounded-xl border border-border bg-surface-2 px-4 py-2.5 text-xs text-muted"
+        >
+          サンプル棋譜（ルイ・ロペス）です。自分の対局を振り返るには、対局してから「レビュー」を開くか、終局後の「この対局を振り返る」を使ってください。
         </div>
       )}
 

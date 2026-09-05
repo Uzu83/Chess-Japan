@@ -148,13 +148,27 @@ interface ShogiPlaySessionProps {
    *   渡すだけで、実際の開始は下の effect が担う（責務分離）。省略時（チェス利用/入口A未使用）は影響なし。
    */
   playFrom?: { sfen: string; nonce: number } | null;
+  /**
+   * 盤が画面上で見えるか（App の対局タブ表示かつ PlayView の将棋 kind）。
+   * ShogiPlayBoard が hidden 復帰時に set し直すために使う（#73）。
+   */
+  boardVisible?: boolean;
+  /** ヘッダー「レビュー」用の進行中棋譜 getter を登録（#76）。 */
+  registerActiveRecordGetter?: (
+    getter: (() => { kind: 'shogi'; text: string } | null) | null,
+  ) => void;
 }
 
 /**
  * 将棋 AI 対局セッション本体。PlayView の状態機械を将棋へ写した独立実装。
  * default export は React.lazy から読むため。
  */
-export default function ShogiPlaySession({ onReview, playFrom }: ShogiPlaySessionProps) {
+export default function ShogiPlaySession({
+  onReview,
+  playFrom,
+  boardVisible = true,
+  registerActiveRecordGetter,
+}: ShogiPlaySessionProps) {
   const { status: authStatus } = useAuth();
   // ── エンジン ────────────────────────────────────────────────
   const engineRef = useRef<ChessEngine | null>(null);
@@ -178,6 +192,26 @@ export default function ShogiPlaySession({ onReview, playFrom }: ShogiPlaySessio
   const youColorRef = useRef<ShogiColor>('sente');
   youColorRef.current = youColor;
   const activeDifficultyRef = useRef<Difficulty>(difficulty);
+
+  // App/PlayView ヘッダー「レビュー」用（#76）
+  useEffect(() => {
+    if (!registerActiveRecordGetter) return;
+    registerActiveRecordGetter(() => {
+      const game = gameRef.current;
+      if (!game || !snap || snap.moveCount === 0) return null;
+      const opponent = `AI (${activeDifficultyRef.current.label})`;
+      const color = youColorRef.current;
+      return {
+        kind: 'shogi',
+        text: game.exportKif({
+          black: color === 'sente' ? 'あなた' : opponent,
+          white: color === 'gote' ? 'あなた' : opponent,
+          title: 'AI 戦',
+        }),
+      };
+    });
+    return () => registerActiveRecordGetter(null);
+  }, [registerActiveRecordGetter, snap]);
   const [orientation, setOrientation] = useState<ShogiColor>('sente');
   const [aiThinking, setAiThinking] = useState(false);
   const [aiError, setAiError] = useState(false);
@@ -389,7 +423,40 @@ export default function ShogiPlaySession({ onReview, playFrom }: ShogiPlaySessio
   }, [runAiMove]);
 
   // ── 設定へ戻る（対局を破棄） ──────────────────────────────────
+  /*
+   * #83/#74: 1手以上の進行中対局は確認のうえ unfinished で履歴保存してから破棄する。
+   * 再開はしない。0手は保存しない（KIF が空で振り返れない）。
+   */
   const handleNewGame = useCallback(() => {
+    const game = gameRef.current;
+    const current = snap;
+    if (game && current && !current.outcome.over && current.moveCount > 0) {
+      const ok = window.confirm(
+        '進行中の対局を中断しますか？棋譜は履歴に「中断」として残り、あとから振り返れます。',
+      );
+      if (!ok) return;
+      if (!savedCurrentRef.current) {
+        savedCurrentRef.current = true;
+        const opponent = `AI (${activeDifficultyRef.current.label})`;
+        const kif = game.exportKif({
+          black: youColor === 'sente' ? 'あなた' : opponent,
+          white: youColor === 'gote' ? 'あなた' : opponent,
+          title: 'AI 戦（中断）',
+        });
+        const played: PlayedGame = {
+          id: newId(),
+          createdAt: Date.now(),
+          pgn: kif,
+          result: '*',
+          outcome: 'unfinished',
+          youColor: toStorageColor(youColor),
+          opponent,
+          moveCount: current.moveCount,
+          game: 'shogi',
+        };
+        setHistory(savePlayedGame(played).filter((g) => playedGameKind(g) === 'shogi'));
+      }
+    }
     ++turnTokenRef.current;
     gameRef.current = null;
     savedCurrentRef.current = false;
@@ -397,6 +464,45 @@ export default function ShogiPlaySession({ onReview, playFrom }: ShogiPlaySessio
     setAiError(false);
     setSnap(null);
     setHistory(loadShogiHistory()); // 直前対局が保存されている可能性
+  }, [snap, youColor]);
+
+  // ── リロード/タブ閉じでも 1手以上を unfinished 保存（#74。再開はしない） ──
+  // BFCache (pagehide.persisted) では保存しない — 戻って終局したときの保存を殺さない（Codex major）。
+  useEffect(() => {
+    const persistUnfinished = () => {
+      const game = gameRef.current;
+      if (!game || savedCurrentRef.current) return;
+      const s = game.snapshot();
+      if (s.outcome.over || s.moveCount === 0) return;
+      savedCurrentRef.current = true;
+      const opponent = `AI (${activeDifficultyRef.current.label})`;
+      const color = youColorRef.current;
+      savePlayedGame({
+        id: newId(),
+        createdAt: Date.now(),
+        pgn: game.exportKif({
+          black: color === 'sente' ? 'あなた' : opponent,
+          white: color === 'gote' ? 'あなた' : opponent,
+          title: 'AI 戦（中断）',
+        }),
+        result: '*',
+        outcome: 'unfinished',
+        youColor: toStorageColor(color),
+        opponent,
+        moveCount: s.moveCount,
+        game: 'shogi',
+      });
+    };
+    const onPageHide = (e: PageTransitionEvent) => {
+      if (e.persisted) return;
+      persistUnfinished();
+    };
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', persistUnfinished);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', persistUnfinished);
+    };
   }, []);
 
   // ── 終局時に履歴へ自動保存 + レート更新 ─────────────────────
@@ -534,6 +640,7 @@ export default function ShogiPlaySession({ onReview, playFrom }: ShogiPlaySessio
                   legalDests={snap.legalDests}
                   dropDests={snap.dropDests}
                   movable={canMove}
+                  visible={boardVisible}
                   needsPromotionChoice={(from, to) =>
                     gameRef.current?.needsPromotionChoice(from, to) ?? false
                   }
@@ -709,7 +816,7 @@ function ShogiSetupScreen({
           </span>
           <h2 className="text-lg font-bold text-on-surface">やねうら王と対局</h2>
           <p className="mt-1 text-xs text-muted">
-            ブラウザ上のAI（やねうら王／水匠）と対局します。棋譜はこの端末に残り、あとから1手ずつ振り返れます。
+            ブラウザ上のAI（やねうら王／水匠）と対局します。終局（投了・詰みなど）した対局は、この端末の履歴に残り、あとから1手ずつ振り返れます。中断した対局も履歴に「中断」として残ります。
           </p>
           <p className="mt-2 text-sm">
             <span className="text-muted">あなたのレート（将棋）: </span>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ReviewView } from './ui/ReviewView';
 import { PlayView } from './ui/PlayView';
 import type { GameKind } from './core/types';
@@ -29,6 +29,30 @@ const pvpEnabled = import.meta.env.VITE_PVP_ENABLED === '1' && isAuthConfigured(
 
 /** アプリのモード。対局(AI戦) / レビュー / プレイ分析 / 対人戦。 */
 type Mode = 'play' | 'review' | 'strength' | 'pvp';
+
+/** URL ?m= からモードを読む（#82）。未知値は play。hash #g= は触らない。 */
+function modeFromSearch(): Mode {
+  if (typeof window === 'undefined') return 'play';
+  const m = new URLSearchParams(window.location.search).get('m');
+  // PvP 無効時に ?m=pvp だと主画面が全部 hidden になる（Codex major）。play へ落とす。
+  if (m === 'pvp') return pvpEnabled ? 'pvp' : 'play';
+  if (m === 'review' || m === 'strength') return m;
+  return 'play';
+}
+
+/** history にモードを反映（#82）。play は ?m を消す。 */
+function writeModeToUrl(m: Mode, method: 'push' | 'replace', opts?: { clearShareHash?: boolean }) {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  if (m === 'play') url.searchParams.delete('m');
+  else url.searchParams.set('m', m);
+  // 対局から別棋譜を開いたときは古い #g= を落とす（表示と URL の食い違い防止・Codex major）。
+  // 共有リンク初回オープンや popstate では clearShareHash を付けない。
+  if (opts?.clearShareHash) url.hash = '';
+  const next = url.pathname + url.search + url.hash;
+  if (method === 'push') window.history.pushState({ mode: m }, '', next);
+  else window.history.replaceState({ mode: m }, '', next);
+}
 
 /*
  * 初回サインイン時のオンボーディング(初期レート設定)ゲート。
@@ -69,10 +93,12 @@ function PasswordRecoveryGate() {
  *   「この対局を振り返る」導線:
  *     PlayView が終局棋譜を onReview({kind,text}) で渡す → reviewKey を進めて ReviewView を再マウントし、
  *     initialRecord として最優先ロードさせる(ReviewView 側の初期化優先順位 0 番。chess=PGN/shogi=KIF)。
+ *   #76: ヘッダー「レビュー」でも進行中/直近履歴を渡す（無ければサンプル）。
+ *   #82: ?m=play|review を history に載せ、戻るでアプリ内に留まる（#g= 共有は壊さない）。
  */
 function App() {
   const [isolated, setIsolated] = useState<boolean | null>(null);
-  const [mode, setMode] = useState<Mode>('play');
+  const [mode, setMode] = useState<Mode>(() => modeFromSearch());
   const [publicStrengthHandle, setPublicStrengthHandle] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
     const h = new URLSearchParams(window.location.search).get('strength')?.trim().toLowerCase();
@@ -87,14 +113,35 @@ function App() {
   );
   const [reviewKey, setReviewKey] = useState(0);
   // ReviewView を一度でもマウントしたか(遅延マウント + 以降 hidden 保持)。
-  const [reviewMounted, setReviewMounted] = useState(false);
+  // ?m=review 直リンク時は初回からマウント（#82）。
+  const [reviewMounted, setReviewMounted] = useState(() => modeFromSearch() === 'review');
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const feedbackAvailable = isFeedbackAvailable();
   const feedbackInApp = isFeedbackBackendConfigured();
   const feedbackFormUrl = getFeedbackFormUrl();
 
+  /** PlayView が登録する「いまレビューすべき棋譜」取得（#76）。 */
+  const getActiveRecordRef = useRef<(() => { kind: GameKind; text: string } | null) | null>(null);
+  const registerActiveRecordGetter = useCallback(
+    (getter: (() => { kind: GameKind; text: string } | null) | null) => {
+      getActiveRecordRef.current = getter;
+    },
+    [],
+  );
+
   useEffect(() => {
     setIsolated(typeof window !== 'undefined' ? window.crossOriginIsolated : null);
+  }, []);
+
+  // ブラウザ戻る/進むで ?m= を mode に同期（#82）。
+  useEffect(() => {
+    const onPop = () => {
+      const next = modeFromSearch();
+      if (next === 'review') setReviewMounted(true);
+      setMode(next);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
   }, []);
 
   // 対局からの「振り返る」: 棋譜(kind + 本文)を渡してレビューへ切り替え(再マウントで最優先ロード)。
@@ -103,6 +150,8 @@ function App() {
     setReviewKey((k) => k + 1);
     setReviewMounted(true);
     setMode('review');
+    // 自分の対局を開くので古い共有 #g= は捨てる（表示と URL の一致）。
+    writeModeToUrl('review', 'push', { clearShareHash: true });
   };
 
   // レビューからの「この局面から対局」(Phase 2B: チェス / Phase 4-3: 将棋): 局面を渡して対局へ切り替え。
@@ -114,11 +163,36 @@ function App() {
   const handlePlayFrom = (fen: string, kind: GameKind) => {
     setPlayFrom((prev) => ({ fen, kind, nonce: (prev?.nonce ?? 0) + 1 }));
     setMode('play');
+    writeModeToUrl('play', 'push');
   };
 
-  // タブ切替。レビューを開いたら以降マウント状態を保つ。
+  // タブ切替。レビューを開いたら進行中/直近棋譜を載せる（#76）。history に ?m= を載せる（#82）。
   const switchMode = (m: Mode) => {
-    if (m === 'review') setReviewMounted(true);
+    // 同じタブ再クリックで history を増やさない（Codex nit: Back が同じ review に留まる）。
+    if (m === mode) {
+      if (m === 'review') {
+        const rec = getActiveRecordRef.current?.() ?? null;
+        if (rec) {
+          setReviewRecord(rec);
+          setReviewKey((k) => k + 1);
+          writeModeToUrl('review', 'replace', { clearShareHash: true });
+        }
+      }
+      return;
+    }
+    if (m === 'review') {
+      setReviewMounted(true);
+      const rec = getActiveRecordRef.current?.() ?? null;
+      if (rec) {
+        setReviewRecord(rec);
+        setReviewKey((k) => k + 1);
+        writeModeToUrl(m, 'push', { clearShareHash: true });
+      } else {
+        writeModeToUrl(m, 'push');
+      }
+    } else {
+      writeModeToUrl(m, 'push');
+    }
     setMode(m);
   };
 
@@ -241,7 +315,12 @@ function App() {
             <>
               {/* PlayView は常時マウント(対局中の状態をタブ切替で失わない)。 */}
               <div className={mode === 'play' ? '' : 'hidden'}>
-                <PlayView onReview={handleReview} playFrom={playFrom} />
+                <PlayView
+                  onReview={handleReview}
+                  playFrom={playFrom}
+                  boardVisible={mode === 'play'}
+                  registerActiveRecordGetter={registerActiveRecordGetter}
+                />
               </div>
 
               {reviewMounted && (

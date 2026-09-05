@@ -51,7 +51,6 @@ describe('将棋盤 見た目バグ回帰ガード', () => {
       legalDests: new Map<string, string[]>(),
       dropDests: new Map<string, string[]>(),
       movable: true,
-      withEvents: false,
       onMoveAfter: () => {},
       onDropAfter: () => {},
     };
@@ -84,13 +83,10 @@ describe('将棋盤 見た目バグ回帰ガード', () => {
       expect(buildShogiPlayConfig({ ...params, movable: true }).activeColor).toBe('sente');
     });
 
-    it('withEvents=true のときだけ着手/打ちの events.after が付く', () => {
-      expect(
-        buildShogiPlayConfig({ ...params, withEvents: false }).movable?.events,
-      ).toBeUndefined();
-      expect(
-        buildShogiPlayConfig({ ...params, withEvents: true }).movable?.events?.after,
-      ).toBeTypeOf('function');
+    it('着手/打ちの events.after は常に付く（#73: set 省略でハンドラが落ちるのを防ぐ）', () => {
+      const cfg = buildShogiPlayConfig(params);
+      expect(cfg.movable?.events?.after).toBeTypeOf('function');
+      expect(cfg.droppable?.events?.after).toBeTypeOf('function');
     });
   });
 });
