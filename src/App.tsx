@@ -34,7 +34,9 @@ type Mode = 'play' | 'review' | 'strength' | 'pvp';
 function modeFromSearch(): Mode {
   if (typeof window === 'undefined') return 'play';
   const m = new URLSearchParams(window.location.search).get('m');
-  if (m === 'review' || m === 'strength' || m === 'pvp') return m;
+  // PvP 無効時に ?m=pvp だと主画面が全部 hidden になる（Codex major）。play へ落とす。
+  if (m === 'pvp') return pvpEnabled ? 'pvp' : 'play';
+  if (m === 'review' || m === 'strength') return m;
   return 'play';
 }
 

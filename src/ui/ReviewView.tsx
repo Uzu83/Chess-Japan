@@ -330,9 +330,21 @@ export function ReviewView({
         // 単手解析トークンもリセット
         ++analyzeToken.current;
       } catch (e) {
-        // #95: 失敗時に model を null にすると index/解説が残り「1/0」矛盾になる。
-        // 既存棋譜・盤・解説は保持し、エラー文だけ出す（textarea のゴミはそのまま直せる）。
+        // #95: 同じチェス棋譜の読み込み失敗では model を残す（1/0 矛盾防止）。
+        // 種別切替直後など model.kind!=='chess' のときは破棄（盤に SFEN が渡る事故・Codex major）。
         setError(`PGN を読み込めませんでした: ${(e as Error).message}`);
+        let clearedMismatch = false;
+        setModel((prev) => {
+          if (prev == null || prev.kind === 'chess') return prev;
+          clearedMismatch = true;
+          return null;
+        });
+        if (clearedMismatch) {
+          setIndex(0);
+          setContexts({});
+          setExplanations({});
+          setThreads({});
+        }
       }
     },
     [], // useState setters は安定 → deps 不要
@@ -382,9 +394,21 @@ export function ReviewView({
       ++analyzeToken.current;
     } catch (e) {
       if (seq !== shogiLoadSeqRef.current || kindRef.current !== 'shogi') return;
-      // #95: チェスと同様、失敗で既存棋譜を破棄しない（1/0 矛盾・盤と解説の食い違い防止）。
-      // loadedKif も前回の成功値を残す（共有リンクは「最後に正常ロードできた」棋譜のまま）。
+      // #95: 同じ将棋棋譜の失敗では model を残す。チェス model が残っている切替失敗は破棄（Codex major）。
       setError(`将棋の棋譜を読み込めませんでした: ${(e as Error).message}`);
+      let clearedMismatch = false;
+      setModel((prev) => {
+        if (prev == null || prev.kind === 'shogi') return prev;
+        clearedMismatch = true;
+        return null;
+      });
+      if (clearedMismatch) {
+        setIndex(0);
+        setContexts({});
+        setExplanations({});
+        setThreads({});
+        setLoadedPgn(null);
+      }
     } finally {
       // ローディング表示は「最新のロード」だけが畳む(古いロードが新しい表示を消さない)
       if (seq === shogiLoadSeqRef.current) setShogiLoading(false);
