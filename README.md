@@ -60,6 +60,8 @@ npm run build      # 本番ビルド
 LLM のキーは Supabase の secrets にのみ設定する（`docs/` 参照）。
 `VITE_SENTRY_DSN`（エラー監視、公開値）は任意 — 未設定なら Sentry は完全オフ。設定する場合は
 Sentry 側で Allowed Domains を必ず絞ること（`.env.example` の運用メモ参照）。
+`VITE_CF_WEB_ANALYTICS_TOKEN`（アクセス集計、公開値）も任意 — 未設定ならビーコンは読み込まない。
+有効化手順は `.env.example`。自動注入とスニペットの併用はしない。
 
 ### WASM マルチスレッドの確認
 
